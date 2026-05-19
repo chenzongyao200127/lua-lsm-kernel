@@ -3453,13 +3453,41 @@ LUA_LSM_INT_DEFINE2(bpf_token_capable, const struct bpf_token *, token,
 
 #endif /* CONFIG_BPF_SYSCALL */
 
+static const char *lockdown_level(enum lockdown_reason what)
+{
+	int value = (int)what;
+
+	if (value == LOCKDOWN_NONE)
+		return "none";
+	if (value > LOCKDOWN_NONE && value < LOCKDOWN_INTEGRITY_MAX)
+		return "integrity";
+	if (value > LOCKDOWN_INTEGRITY_MAX &&
+	    value < LOCKDOWN_CONFIDENTIALITY_MAX)
+		return "confidentiality";
+	return "unknown";
+}
+
+static void push_lockdown_reason(lua_State *L, enum lockdown_reason what)
+{
+	int value = (int)what;
+
+	if (value >= LOCKDOWN_NONE && value <= LOCKDOWN_CONFIDENTIALITY_MAX &&
+	    lockdown_reasons[value])
+		lua_pushstring(L, lockdown_reasons[value]);
+	else
+		lua_pushnil(L);
+
+	lua_pushstring(L, lockdown_level(what));
+	lua_pushinteger(L, value);
+}
+
 /**
- * TODO: locked_down
+ * locked_down
  * Default: 0
  */
 LUA_LSM_INT_DEFINE1(locked_down, enum lockdown_reason, what)
 {
-	lua_pushnil(L);	/* TODO: what */
+	push_lockdown_reason(L, what);
 }
 
 #ifdef CONFIG_PERF_EVENTS
