@@ -114,19 +114,25 @@ static void lua_lsm_hook_stats_init_cpu(int cpu)
 void lua_lsm_hook_stats_record(unsigned int nr, u64 delta)
 {
 	struct lua_lsm_hook_pcpu_stat *stat;
-	unsigned long flags;
 	u64 maxtime;
+#if !IS_ENABLED(CONFIG_64BIT)
+	unsigned long flags;
 
 	local_irq_save(flags);
+#endif
 	stat = &this_cpu_ptr(&lua_lsm_pcpu_stats)->hooks[nr];
+#if !IS_ENABLED(CONFIG_64BIT)
 	u64_stats_update_begin(&stat->syncp);
+#endif
 	u64_stats_inc(&stat->count);
 	u64_stats_add(&stat->time, delta);
 	maxtime = u64_stats_read(&stat->maxtime);
 	if (maxtime < delta)
 		u64_stats_set(&stat->maxtime, delta);
+#if !IS_ENABLED(CONFIG_64BIT)
 	u64_stats_update_end(&stat->syncp);
 	local_irq_restore(flags);
+#endif
 }
 
 static void lvm_stats_vmalloc(void)
