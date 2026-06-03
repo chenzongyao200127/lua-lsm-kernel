@@ -12,7 +12,7 @@ config SECURITY_LUA_LSM
 config SECURITY_LUA_LSM_STATS
 	bool "Lua-LSM Statistics"
 	depends on SECURITY_LUA_LSM
-	default n
+	default y
 	help
 	  This selects the lua-lsm statistics.
 	  If you are unsure how to answer this question, answer N.
