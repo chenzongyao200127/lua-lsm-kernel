@@ -21,7 +21,7 @@
 #include <linux/mnt_idmapping.h>
 #include <linux/prctl.h>
 #include <linux/syscalls.h>     /* for __MAP */
-#include <linux/timekeeping.h>  /* for ktime_get */
+#include <linux/sched/clock.h>  /* for local_clock */
 #include <linux/kernel_read_file.h>
 #include <net/ipv6.h>
 #include <linux/lsm_hooks.h>

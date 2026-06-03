@@ -19,7 +19,7 @@
 #include <linux/cred.h>
 #include <linux/percpu.h>
 #include <linux/syscalls.h>	/* for __MAP */
-#include <linux/timekeeping.h>	/* for ktime_get */
+#include <linux/sched/clock.h>	/* for local_clock */
 #include <linux/lsm_hooks.h>
 #include <uapi/linux/lsm.h>
 #include <linux/lua.h>

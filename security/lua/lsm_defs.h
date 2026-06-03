@@ -27,13 +27,13 @@
 
 #define START_STATS(NAME)								\
 	do {										\
-		___stats_start = ktime_get_ns();					\
+		___stats_start = local_clock();						\
 	} while (0)
 
 #define END_STATS(NAME)									\
 	do {										\
 		lua_lsm_hook_stats_record(__LL_NR_ ## NAME,				\
-			ktime_get_ns() - ___stats_start);				\
+			local_clock() - ___stats_start);				\
 	} while (0)
 
 #else
