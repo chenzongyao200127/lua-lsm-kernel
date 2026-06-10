@@ -11,3 +11,4 @@ lua-lsm-core-y := lsm.o securityfs.o auxlib.o kvcache.o lsm_defs.o \
 
 obj-$(CONFIG_LUA_LSM_LIB_KERNEL)     += lua_kernel.o
 obj-$(CONFIG_LUA_LSM_LIB_FS)         += lua_fs.o
+obj-$(CONFIG_LUA_LSM_LIB_NET)        += lua_net.o
