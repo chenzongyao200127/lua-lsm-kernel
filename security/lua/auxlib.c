@@ -327,6 +327,15 @@ void **newcptr(lua_State *L, const char *metatable)
 }
 EXPORT_SYMBOL_GPL(newcptr);
 
+static void meta_raw_register(lua_State *L, const luaL_Reg *meth)
+{
+	for (; meth && meth->name; meth++) {
+		lua_pushstring(L, meth->name);
+		lua_pushcfunction(L, meth->func);
+		lua_rawset(L, -3);
+	}
+}
+
 void createmeta(lua_State *L, const char *tname, const char *name,
 		const luaL_Reg *meth, const luaL_Reg *base, int pop)
 {
@@ -339,10 +348,10 @@ void createmeta(lua_State *L, const char *tname, const char *name,
 	lua_pushvalue(L, -1);
 	lua_setfield(L, -2, "__index");
 	if (base)
-		luaL_register(L, NULL, base);
+		meta_raw_register(L, base);
 
 	if (meth)
-		luaL_register(L, NULL, meth);
+		meta_raw_register(L, meth);
 
 	if (pop)
 		lua_pop(L, 1);
