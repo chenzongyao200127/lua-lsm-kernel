@@ -25,3 +25,15 @@ config SECURITY_LUA_LSM_DEBUG
 	  This enables debugging code designed to help Lua-LSM kernel
 	  developers, unless you know what this does in the kernel code you
 	  should leave this disabled.
+
+config LUA_LSM_REQUIRE_SIGNED_API
+	bool "Require signed lua-lsm API library modules"
+	depends on SECURITY_LUA_LSM
+	default y if MODULE_SIG_FORCE
+	help
+	  When enabled, lua-lsm rejects unsigned API library modules at
+	  registration time.  This complements the kernel module signature
+	  gate and is the right default on systems that already require
+	  signed modules.
+
+	  If unsure, say N.
