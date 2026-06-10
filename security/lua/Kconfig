@@ -70,3 +70,14 @@ config LUA_LSM_LIB_NET
 	  Policy code loads this library with require("net").
 
 	  Say Y to build into the core, or M for a loadable producer.
+
+config LUA_LSM_LIB_ERRNO
+	tristate "lua-lsm errno API library"
+	depends on SECURITY_LUA_LSM
+	default y if SECURITY_LUA_LSM=y
+	help
+	  Lua API library exposing errno constants and errname() so
+	  lua-lsm policy code can translate kernel error values.
+	  Policy code loads this library with require("errno").
+
+	  Say Y to build into the core, or M for a loadable producer.
