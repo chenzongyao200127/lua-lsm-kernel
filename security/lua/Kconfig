@@ -37,3 +37,14 @@ config LUA_LSM_REQUIRE_SIGNED_API
 	  signed modules.
 
 	  If unsure, say N.
+
+config LUA_LSM_LIB_KERNEL
+	tristate "lua-lsm kernel API library"
+	depends on SECURITY_LUA_LSM
+	default y if SECURITY_LUA_LSM=y
+	help
+	  Lua API library exposing task, credential, namespace, securebits,
+	  and randomness helpers to lua-lsm policy code.
+	  Policy code loads this library with require("kernel").
+
+	  Say Y to build into the core, or M for a loadable producer.
