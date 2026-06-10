@@ -92,3 +92,14 @@ config LUA_LSM_LIB_CAPABILITY
 	  Policy code loads this library with require("capability").
 
 	  Say Y to build into the core, or M for a loadable producer.
+
+config LUA_LSM_LIB_SIGNAL
+	tristate "lua-lsm signal API library"
+	depends on SECURITY_LUA_LSM
+	default y if SECURITY_LUA_LSM=y
+	help
+	  Lua API library exposing signal constants to lua-lsm policy code.
+	  It provides symbolic names for kernel signal numbers.
+	  Policy code loads this library with require("signal").
+
+	  Say Y to build into the core, or M for a loadable producer.
