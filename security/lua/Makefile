@@ -13,3 +13,4 @@ obj-$(CONFIG_LUA_LSM_LIB_KERNEL)     += lua_kernel.o
 obj-$(CONFIG_LUA_LSM_LIB_FS)         += lua_fs.o
 obj-$(CONFIG_LUA_LSM_LIB_NET)        += lua_net.o
 obj-$(CONFIG_LUA_LSM_LIB_ERRNO)      += lua_errno.o
+obj-$(CONFIG_LUA_LSM_LIB_CAPABILITY) += lua_capability.o

@@ -81,3 +81,14 @@ config LUA_LSM_LIB_ERRNO
 	  Policy code loads this library with require("errno").
 
 	  Say Y to build into the core, or M for a loadable producer.
+
+config LUA_LSM_LIB_CAPABILITY
+	tristate "lua-lsm capability API library"
+	depends on SECURITY_LUA_LSM
+	default y if SECURITY_LUA_LSM=y
+	help
+	  Lua API library exposing capability constants, cap helpers, and
+	  capable() checks to lua-lsm policy code.
+	  Policy code loads this library with require("capability").
+
+	  Say Y to build into the core, or M for a loadable producer.
