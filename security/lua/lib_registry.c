@@ -110,15 +110,11 @@ static int lua_api_lib_validate_shared(const struct lua_api_lib *desc)
 	return 0;
 }
 
-/*
- * Registering a library injects new C closures into every per-CPU VM,
- * comparable to loading an unsigned module.
- */
-static int lua_api_lib_gate_lockdown(void)
+static int lua_api_lib_gate_lockdown(const struct lua_api_lib *desc)
 {
-	int rc = security_locked_down(LOCKDOWN_MODULE_SIGNATURE);
-
-	if (rc)
+	if (!desc->owner)
+		return 0;
+	if (security_locked_down(LOCKDOWN_MODULE_SIGNATURE))
 		return -EPERM;
 	return 0;
 }
@@ -666,7 +662,7 @@ int __lua_api_lib_register(struct lua_api_lib *desc)
 		goto audit;
 	}
 
-	err = lua_api_lib_gate_lockdown();
+	err = lua_api_lib_gate_lockdown(desc);
 	if (err) {
 		reason = LUA_API_LIB_AUDIT_LOCKDOWN;
 		goto audit;
