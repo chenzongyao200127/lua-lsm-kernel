@@ -801,9 +801,13 @@ static void lua_modules_free(struct task_struct *task, lua_State *L)
 		lua_rawget(L, -2);
 		if (lua_istable(L, -1)) {
 			atomic_dec(&module->nloaded);
-			__log_info("<%s>: %d-%d freed module <%s>, nloaded = %d\n",
-				   task->comm, task_tgid_nr(task), task_pid_nr(task),
-				   module->name, atomic_read(&module->nloaded));
+			if (task)
+				__log_info("<%s>: %d-%d freed module <%s>, nloaded = %d\n",
+					   task->comm, task_tgid_nr(task), task_pid_nr(task),
+					   module->name, atomic_read(&module->nloaded));
+			else
+				__log_info("freed module <%s>, nloaded = %d\n",
+					   module->name, atomic_read(&module->nloaded));
 		}
 		lua_pop(L, 1);
 	}
@@ -944,6 +948,13 @@ static int lua_state_alloc(struct lvm_state *lvm)
 void lua_state_free(struct lvm_state *lvm)
 {
 	if (lvm->L) {
+		if (lvm->dirty) {
+			int idx = srcu_read_lock(&modules_ss);
+
+			lua_modules_free(NULL, lvm->L);
+			srcu_read_unlock(&modules_ss, idx);
+			lvm->dirty = false;
+		}
 		lvm_stats_vmfree();
 		lua_close(lvm->L);
 		lvm->L = NULL;
@@ -1525,7 +1536,10 @@ void task_blob_free(struct task_struct *task)
 	/* Pairs with cmpxchg() in lvm_get_task_state(). */
 	lvm = smp_load_acquire(&llt->lvm);
 	if (lvm && READ_ONCE(lvm->L) && lvm->dirty) {
+		int idx = srcu_read_lock(&modules_ss);
+
 		lua_modules_free(task, lvm->L);
+		srcu_read_unlock(&modules_ss, idx);
 		lvm_vm_reset(lvm);
 		lvm->dirty = false;
 	}
