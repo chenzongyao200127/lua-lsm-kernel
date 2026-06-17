@@ -77,6 +77,5 @@ return M
 
 - `USAGE.md` - build/enable and runtime management
 - `API.md` - module format, hook returns, and core APIs
-- `API_LIB_REGISTRATION.md` - producer ABI for the `kernel`/`fs`/`net`/...
-  API libraries
+- `API_PRODUCER_MODULES.md` - writing Lua API producer modules
 - `OBSERVABILITY.md` - stats, debug logs, and troubleshooting data
