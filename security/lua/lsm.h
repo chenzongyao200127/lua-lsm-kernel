@@ -271,6 +271,7 @@ extern atomic_t lua_api_lib_generation;
 
 int lua_api_lib_cpu_hotplug_init(void);
 int lualibs_openall_dynamic(lua_State *L);
+int lua_api_libraries_show(struct seq_file *m, void *v);
 
 /* Must run before lualibs_openall_dynamic() seeds method tables on these metatables. */
 int lib_metatables_init(lua_State *L);

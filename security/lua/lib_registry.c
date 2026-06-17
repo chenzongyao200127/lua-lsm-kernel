@@ -769,3 +769,40 @@ int lua_api_lib_register(struct lua_api_lib *desc)
 	return __lua_api_lib_register(desc);
 }
 EXPORT_SYMBOL_GPL(lua_api_lib_register);
+
+int lua_api_libraries_show(struct seq_file *m, void *v)
+{
+	struct lua_api_lib *desc;
+	unsigned int nfuncs;
+	unsigned int version;
+	int idx;
+	bool found = false;
+
+	version = (unsigned int)atomic_read(&lua_api_lib_generation);
+	seq_puts(m, "API libraries for lua-lsm\n");
+	seq_printf(m, "API set version: %u\n", version);
+	seq_printf(m, "%-20s %-20s %5s %10s %4s\n",
+		   "name", "provider", "funcs", "extra-init", "abi");
+	seq_printf(m, "%s\n", TABLINE);
+
+	idx = srcu_read_lock(&modules_ss);
+	list_for_each_entry_srcu(desc, &lua_api_libs, list,
+				 srcu_read_lock_held(&modules_ss)) {
+		found = true;
+		nfuncs = 0;
+		while (desc->funcs[nfuncs].name)
+			nfuncs++;
+
+		seq_printf(m, "%-20s %-20s %5u %10s %4u\n",
+			   desc->name,
+			   desc->owner ? desc->owner->name : "builtin",
+			   nfuncs,
+			   desc->open_extras ? "yes" : "no",
+			   desc->abi_version);
+	}
+	srcu_read_unlock(&modules_ss, idx);
+	if (!found)
+		seq_puts(m, "(none)\n");
+
+	return 0;
+}
