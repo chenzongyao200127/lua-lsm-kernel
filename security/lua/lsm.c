@@ -322,11 +322,11 @@ static struct lvm_state *lvm_pool_get(void)
 {
 	struct lvm_state *lvm = NULL, *stale = NULL, *next;
 	struct lvm_pool_cpu *pool;
-	unsigned int live_gen;
+	unsigned int registry_gen;
 	unsigned long flags;
 	int cpu;
 
-	live_gen = (unsigned int)atomic_read(&lua_api_lib_generation);
+	registry_gen = (unsigned int)atomic_read(&lua_api_lib_generation);
 
 	cpu = get_cpu();
 	pool = &per_cpu(lvm_pools, cpu);
@@ -336,7 +336,7 @@ static struct lvm_state *lvm_pool_get(void)
 
 		pool->head = cur->next;
 		pool->count--;
-		if (cur->generation == live_gen) {
+		if (cur->generation == registry_gen) {
 			lvm = cur;
 			break;
 		}
@@ -356,6 +356,29 @@ static struct lvm_state *lvm_pool_get(void)
 		stale = next;
 	}
 
+	return lvm;
+}
+
+static struct lvm_state *lvm_state_build_task(void)
+{
+	struct lvm_state *lvm;
+	int err;
+
+	lvm = lvm_pool_get();
+	if (!lvm) {
+		lvm = kzalloc(sizeof(*lvm), lua_lsm_gfp());
+		if (!lvm)
+			return NULL;
+
+		err = lua_state_alloc(lvm);
+		if (err) {
+			kfree(lvm);
+			return NULL;
+		}
+	}
+
+	lvm->next = NULL;
+	refcount_init(&lvm->refcount, 0);
 	return lvm;
 }
 
@@ -380,9 +403,8 @@ static void lvm_pool_put(struct lvm_state *lvm)
 	raw_spin_unlock_irqrestore(&pool->lock, flags);
 	put_cpu();
 
-	if (lvm) {
+	if (lvm)
 		lvm_state_free_heap(lvm);
-	}
 }
 
 static void lvm_vm_reset(struct lvm_state *lvm)
@@ -500,6 +522,7 @@ lvm_get_from_task(const struct task_struct *task, bool exclusive)
 {
 	struct lua_lsm_task *llt = lua_lsm_task(task);
 	struct lvm_state *lvm = lvm_get_task_state(task, !exclusive);
+	unsigned int registry_gen;
 	lua_State *L;
 	int n;
 
@@ -520,37 +543,36 @@ lvm_get_from_task(const struct task_struct *task, bool exclusive)
 	}
 
 	L = smp_load_acquire(&lvm->L);
-	if (!L) {
-		struct lvm_state *pooled = lvm_pool_get();
-		struct lvm_state build_owner;
-		struct lvm_state *owner;
-		lua_State *built;
+	registry_gen = (unsigned int)atomic_read(&lua_api_lib_generation);
+	if (!L || unlikely(READ_ONCE(lvm->generation) < registry_gen)) {
+		struct lvm_state *new_lvm;
 
-		if (pooled) {
-			built = pooled->L;
-			pooled->L = NULL;
-			owner = pooled;
-		} else {
-			memset(&build_owner, 0, sizeof(build_owner));
-			built = lvm_build_lua_state(&build_owner);
-			if (!built)
+		if (n != 1)
+			goto err_put;
+
+		for (;;) {
+			new_lvm = lvm_state_build_task();
+			if (!new_lvm)
 				goto err_put;
-			owner = &build_owner;
+
+			registry_gen = (unsigned int)atomic_read(&lua_api_lib_generation);
+			if (likely(READ_ONCE(new_lvm->generation) >= registry_gen))
+				break;
+
+			lvm_state_free_heap(new_lvm);
 		}
-		lua_setallocf(built, lvm_alloc, lvm);
-#ifdef CONFIG_SECURITY_LUA_LSM_STATS
-		atomic64_set(&lvm->nalloc, atomic64_read(&owner->nalloc));
-		atomic64_set(&lvm->nrealloc,
-			     atomic64_read(&owner->nrealloc));
-		atomic64_set(&lvm->nfree, atomic64_read(&owner->nfree));
-#endif
-		kfree(pooled);
-		/*
-		 * Readers treat non-NULL lvm->L as a ready VM, so publish it
-		 * only after the allocator owner has moved to the task lvm.
-		 */
-		smp_store_release(&lvm->L, built);
-		L = built;
+		refcount_init(&new_lvm->refcount, 1);
+
+		if (unlikely(lvm_task_teardown(llt)) ||
+		    atomic_read(&lvm->refcount) != 1 ||
+		    cmpxchg(&llt->lvm, lvm, new_lvm) != lvm) {
+			lvm_state_free_heap(new_lvm);
+			goto err_put;
+		}
+
+		lvm_state_free_heap(lvm);
+		lvm = new_lvm;
+		L = lvm->L;
 	}
 	return L;
 
