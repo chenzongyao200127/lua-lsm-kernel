@@ -783,10 +783,10 @@ static int lua_modules_index(lua_State *L)
 }
 
 /*
- * When LuaVM is destroyed, iterate over the modules loaded in the VM
- * and update the load count in the module.
+ * Drop each loaded policy module reference recorded in a Lua VM's
+ * _MODULES table, decrementing module->nloaded for every loaded entry.
  */
-static void lua_modules_free(struct task_struct *task, lua_State *L)
+static void lvm_put_loaded_modules(struct task_struct *task, lua_State *L)
 {
 	struct lua_lsm_module *module;
 
@@ -802,11 +802,11 @@ static void lua_modules_free(struct task_struct *task, lua_State *L)
 		if (lua_istable(L, -1)) {
 			atomic_dec(&module->nloaded);
 			if (task)
-				__log_info("<%s>: %d-%d freed module <%s>, nloaded = %d\n",
+				__log_info("<%s>: %d-%d dropped module <%s>, nloaded = %d\n",
 					   task->comm, task_tgid_nr(task), task_pid_nr(task),
 					   module->name, atomic_read(&module->nloaded));
 			else
-				__log_info("freed module <%s>, nloaded = %d\n",
+				__log_info("dropped module <%s>, nloaded = %d\n",
 					   module->name, atomic_read(&module->nloaded));
 		}
 		lua_pop(L, 1);
@@ -951,7 +951,7 @@ void lua_state_free(struct lvm_state *lvm)
 		if (lvm->dirty) {
 			int idx = srcu_read_lock(&modules_ss);
 
-			lua_modules_free(NULL, lvm->L);
+			lvm_put_loaded_modules(NULL, lvm->L);
 			srcu_read_unlock(&modules_ss, idx);
 			lvm->dirty = false;
 		}
@@ -1538,7 +1538,7 @@ void task_blob_free(struct task_struct *task)
 	if (lvm && READ_ONCE(lvm->L) && lvm->dirty) {
 		int idx = srcu_read_lock(&modules_ss);
 
-		lua_modules_free(task, lvm->L);
+		lvm_put_loaded_modules(task, lvm->L);
 		srcu_read_unlock(&modules_ss, idx);
 		lvm_vm_reset(lvm);
 		lvm->dirty = false;
