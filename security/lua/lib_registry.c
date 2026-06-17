@@ -464,11 +464,14 @@ static int lua_api_lib_replay(struct lua_api_lib *desc,
 			      struct lib_replay_log *log)
 {
 	struct lua_lsm_task *llt;
+	unsigned int target_gen;
 	int cpu;
 	int err;
 
 	lockdep_assert_held(&modules_mutex);
 	lockdep_assert_cpus_held();
+
+	target_gen = (unsigned int)atomic_read(&lua_api_lib_generation) + 1;
 
 	for_each_online_cpu(cpu) {
 		struct lvm_state *new_vm = lvm_state_build_new();
@@ -481,6 +484,7 @@ static int lua_api_lib_replay(struct lua_api_lib *desc,
 			lvm_state_free_heap(new_vm);
 			return err;
 		}
+		WRITE_ONCE(new_vm->generation, target_gen);
 		log->irq_new[cpu] = new_vm;
 	}
 
@@ -507,6 +511,7 @@ static int lua_api_lib_replay(struct lua_api_lib *desc,
 			lvm_state_free_heap(new_lvm);
 			return err;
 		}
+		WRITE_ONCE(new_lvm->generation, target_gen);
 		log->current_new = new_lvm;
 
 		llt = lua_lsm_task(current);
@@ -627,6 +632,9 @@ static int lua_api_lib_cpu_online(unsigned int cpu)
 		}
 	}
 	srcu_read_unlock(&modules_ss, idx);
+	if (!err)
+		WRITE_ONCE(lvm->generation,
+			   (unsigned int)atomic_read(&lua_api_lib_generation));
 	return err;
 }
 
