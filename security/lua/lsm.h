@@ -136,7 +136,7 @@ struct lvm_state {
 	struct lvm_state *next;
 	bool dirty;
 	unsigned int generation;
-	int pmain_err;
+	int init_err;
 #ifdef CONFIG_SECURITY_LUA_LSM_STATS
 	atomic64_t nalloc;
 	atomic64_t nrealloc;
@@ -156,7 +156,7 @@ DECLARE_PER_CPU(struct lvm_pool_cpu, lvm_pools);
 
 void lua_state_free(struct lvm_state *lvm);
 struct lvm_state *lvm_state_build_new(void);
-void lvm_state_destroy_full(struct lvm_state *lvm);
+void lvm_state_free_heap(struct lvm_state *lvm);
 struct lvm_state *lvm_state_from_lua_state(lua_State *L);
 lua_State *lvm_get_from_task(const struct task_struct *task, bool exclusive);
 void lvm_put_to_task(const struct task_struct *task, lua_State *L);

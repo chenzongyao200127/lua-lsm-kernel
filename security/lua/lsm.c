@@ -352,8 +352,7 @@ static struct lvm_state *lvm_pool_get(void)
 
 	while (stale) {
 		next = stale->next;
-		lua_state_free(stale);
-		kfree(stale);
+		lvm_state_free_heap(stale);
 		stale = next;
 	}
 
@@ -382,8 +381,7 @@ static void lvm_pool_put(struct lvm_state *lvm)
 	put_cpu();
 
 	if (lvm) {
-		lua_state_free(lvm);
-		kfree(lvm);
+		lvm_state_free_heap(lvm);
 	}
 }
 
@@ -858,17 +856,17 @@ static int lvm_pmain(lua_State *L)
 		struct lvm_state *owner = lvm_state_from_lua_state(L);
 
 		if (owner)
-			owner->pmain_err = err;
+			owner->init_err = err;
 		luaL_error(L, "lib_metatables_init failed: %d", err);
 	}
 
-	/* Stash the precise errno; lua_state_alloc() collapses pcall failure to -ENOEXEC. */
+	/* Preserve the real errno; lua_state_alloc() only sees pcall failure. */
 	err = lualibs_openall_dynamic(L);
 	if (err) {
 		struct lvm_state *owner = lvm_state_from_lua_state(L);
 
 		if (owner)
-			owner->pmain_err = err;
+			owner->init_err = err;
 		luaL_error(L, "lualibs_openall_dynamic failed: %d", err);
 	}
 
@@ -961,15 +959,7 @@ void lua_state_free(struct lvm_state *lvm)
 	}
 }
 
-/**
- * lvm_state_build_new - allocate a fully warmed lvm_state in process context.
- *
- * Used by lib_registry.c to materialise replacement IRQ slots without
- * running Lua mutators under local_bh_disable().
- *
- * Returns the lvm_state on success or an ERR_PTR(): the precise errno
- * stashed by lvm_pmain in lvm->pmain_err on failure, or -ENOMEM otherwise.
- */
+/* Allocate a heap-owned, fully initialized lvm_state for process context. */
 struct lvm_state *lvm_state_build_new(void)
 {
 	struct lvm_state *lvm;
@@ -981,17 +971,17 @@ struct lvm_state *lvm_state_build_new(void)
 
 	err = lua_state_alloc(lvm);
 	if (err) {
-		int pmain_err = lvm->pmain_err;
+		int init_err = lvm->init_err;
 
 		kfree(lvm);
 		/* Map the internal -ENOEXEC to -ENOMEM for the public ABI. */
-		return ERR_PTR(pmain_err ? pmain_err : -ENOMEM);
+		return ERR_PTR(init_err ? init_err : -ENOMEM);
 	}
 	return lvm;
 }
 
-/* Free an lvm_state allocated by lvm_state_build_new().  NULL-safe. */
-void lvm_state_destroy_full(struct lvm_state *lvm)
+/* Free a heap-owned lvm_state.  Use lua_state_free() for embedded states. */
+void lvm_state_free_heap(struct lvm_state *lvm)
 {
 	if (!lvm)
 		return;

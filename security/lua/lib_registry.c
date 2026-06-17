@@ -384,8 +384,7 @@ static void lua_api_lib_drain_pools(void)
 
 		while (lvm) {
 			next = lvm->next;
-			lua_state_free(lvm);
-			kfree(lvm);
+			lvm_state_free_heap(lvm);
 			lvm = next;
 		}
 	}
@@ -479,7 +478,7 @@ static int lua_api_lib_replay(struct lua_api_lib *desc,
 
 		err = lib_install_protected(new_vm->L, desc);
 		if (err) {
-			lvm_state_destroy_full(new_vm);
+			lvm_state_free_heap(new_vm);
 			return err;
 		}
 		log->irq_new[cpu] = new_vm;
@@ -505,21 +504,21 @@ static int lua_api_lib_replay(struct lua_api_lib *desc,
 
 		err = lib_install_protected(new_lvm->L, desc);
 		if (err) {
-			lvm_state_destroy_full(new_lvm);
+			lvm_state_free_heap(new_lvm);
 			return err;
 		}
 		log->current_new = new_lvm;
 
 		llt = lua_lsm_task(current);
 		if (!llt || !llt->lvm) {
-			lvm_state_destroy_full(new_lvm);
+			lvm_state_free_heap(new_lvm);
 			log->current_new = NULL;
 		} else {
 			old_lvm = llt->lvm;
 			n = refcount_acquire(&old_lvm->refcount);
 			if (n != 1) {
 				refcount_release(&old_lvm->refcount);
-				lvm_state_destroy_full(new_lvm);
+				lvm_state_free_heap(new_lvm);
 				log->current_new = NULL;
 			} else {
 				log->current_old = old_lvm;
@@ -537,13 +536,13 @@ static int lua_api_lib_replay(struct lua_api_lib *desc,
 
 	for_each_possible_cpu(cpu) {
 		if (log->irq_installed[cpu] && log->irq_old[cpu]) {
-			lvm_state_destroy_full(log->irq_old[cpu]);
+			lvm_state_free_heap(log->irq_old[cpu]);
 			log->irq_old[cpu] = NULL;
 		}
 	}
 
 	if (log->current_swapped && log->current_old) {
-		lvm_state_destroy_full(log->current_old);
+		lvm_state_free_heap(log->current_old);
 		log->current_old = NULL;
 	}
 
@@ -588,13 +587,13 @@ static bool lua_api_lib_rollback(struct lua_api_lib *desc,
 
 	for_each_possible_cpu(cpu) {
 		if (log->irq_new[cpu]) {
-			lvm_state_destroy_full(log->irq_new[cpu]);
+			lvm_state_free_heap(log->irq_new[cpu]);
 			log->irq_new[cpu] = NULL;
 		}
 	}
 
 	if (cleanup_ok && log->current_new) {
-		lvm_state_destroy_full(log->current_new);
+		lvm_state_free_heap(log->current_new);
 		log->current_new = NULL;
 	}
 
@@ -696,7 +695,7 @@ int __lua_api_lib_register(struct lua_api_lib *desc)
 		goto unlock;
 	}
 	err = lib_install_protected(scratch->L, desc);
-	lvm_state_destroy_full(scratch);
+	lvm_state_free_heap(scratch);
 	if (err) {
 		reason = LUA_API_LIB_AUDIT_SCRATCH;
 		goto unlock;
