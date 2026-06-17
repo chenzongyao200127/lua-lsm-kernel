@@ -28,13 +28,12 @@ config SECURITY_LUA_LSM_DEBUG
 
 config LUA_LSM_REQUIRE_SIGNED_API
 	bool "Require signed lua-lsm API library modules"
-	depends on SECURITY_LUA_LSM
+	depends on SECURITY_LUA_LSM && MODULE_SIG
 	default y if MODULE_SIG_FORCE
 	help
 	  When enabled, lua-lsm rejects unsigned API library modules at
-	  registration time.  This complements the kernel module signature
-	  gate and is the right default on systems that already require
-	  signed modules.
+	  registration time.  Enable this on systems that already require
+	  signed kernel modules.
 
 	  If unsure, say N.
 
