@@ -855,7 +855,7 @@ static int lvm_pmain(lua_State *L)
 	/* Seed metatables before any installer attaches methods to them. */
 	err = lib_metatables_init(L);
 	if (err) {
-		struct lvm_state *owner = lvm_state_from_state(L);
+		struct lvm_state *owner = lvm_state_from_lua_state(L);
 
 		if (owner)
 			owner->pmain_err = err;
@@ -865,7 +865,7 @@ static int lvm_pmain(lua_State *L)
 	/* Stash the precise errno; lua_state_alloc() collapses pcall failure to -ENOEXEC. */
 	err = lualibs_openall_dynamic(L);
 	if (err) {
-		struct lvm_state *owner = lvm_state_from_state(L);
+		struct lvm_state *owner = lvm_state_from_lua_state(L);
 
 		if (owner)
 			owner->pmain_err = err;
@@ -999,8 +999,8 @@ void lvm_state_destroy_full(struct lvm_state *lvm)
 	kfree(lvm);
 }
 
-/* Recover the lvm_state that owns @L; NULL for states not minted here. */
-struct lvm_state *lvm_state_from_state(lua_State *L)
+/* Return the owning lvm_state for @L; NULL if @L is not a lua-lsm VM. */
+struct lvm_state *lvm_state_from_lua_state(lua_State *L)
 {
 	lua_Alloc cur;
 	void *ud;

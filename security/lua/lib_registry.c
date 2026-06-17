@@ -295,7 +295,7 @@ int lualibs_openall_dynamic(lua_State *L)
 	if (err)
 		return err;
 
-	lvm = lvm_state_from_state(L);
+	lvm = lvm_state_from_lua_state(L);
 	if (lvm)
 		WRITE_ONCE(lvm->generation, gen_pre);
 
