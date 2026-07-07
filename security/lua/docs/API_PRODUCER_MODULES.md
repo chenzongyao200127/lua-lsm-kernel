@@ -149,7 +149,12 @@ return {
 ## Notes
 
 - The library name in `.name` is the string passed to `require()`.
+- The library name must not collide with standard Lua libraries opened
+  by the kernel VM: `_G`, `coroutine`, `table`, `string`, or `debug`.
 - `funcs` must be a NULL-terminated `luaL_Reg` array.
+- `init_table`, when provided, runs after `funcs` are installed with the
+  library table on top of the Lua stack.  It must not sleep, pop, or
+  replace that table.
 - `owner` must be `THIS_MODULE` for loadable producers.
 - `abi_version` must be `LUA_API_LIB_ABI_VERSION`.
 - A duplicate library name is rejected.

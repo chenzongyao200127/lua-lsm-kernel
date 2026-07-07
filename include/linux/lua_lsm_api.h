@@ -29,17 +29,19 @@
  * struct lua_api_lib - descriptor for a Lua API library
  * @name:        NUL-terminated library name visible to Lua's require().
  *               Must be non-empty and fit within %LUA_API_LIB_NAME_MAX.
+ *               Must not collide with Lua standard libraries already
+ *               loaded by the core.
  * @funcs:       %NULL-terminated %luaL_Reg table installed on the
  *               library table.  Required; constant-only libraries use
  *               an empty sentinel table.
- * @open_extras: Optional callback invoked after @funcs is installed
+ * @init_table:  Optional callback invoked after @funcs is installed
  *               with the library table on top of the stack.  Must not
  *               pop or replace the library table.  Returns 0, -ENOMEM,
  *               or -EPROTO; other non-zero values are mapped to -EPROTO.
  *               May run in atomic context (CPU-hotplug replay with BHs
  *               disabled), so it must not sleep or take blocking locks.
  *               May be %NULL.
- * @openf:       Reserved; must be %NULL.  Rejected with -EINVAL.
+ * @reserved_open: Reserved; must be %NULL.  Rejected with -EINVAL.
  * @owner:       Module that owns this descriptor.  Set to %THIS_MODULE
  *               for loadable producers.  Built-in producers call
  *               __lua_api_lib_register() and may use %NULL.
@@ -52,8 +54,8 @@
 struct lua_api_lib {
 	const char		*name;
 	const luaL_Reg		*funcs;
-	int			(*open_extras)(lua_State *L);
-	int			(*openf)(lua_State *L);
+	int			(*init_table)(lua_State *L);
+	void			*reserved_open;
 	struct module		*owner;
 	struct list_head	list;
 	u32			abi_version;
@@ -84,7 +86,7 @@ int __lua_api_lib_register(struct lua_api_lib *desc);
 /**
  * lua_api_lib_meta_install - attach a library's method tables to a
  *                            core-owned metatable
- * @L:        Lua state passed to the library's open_extras (or
+ * @L:        Lua state passed to the library's init_table (or
  *            equivalent installer) callback.
  * @name:     metatable identifier as it appears in LUA_OBJECTS_LIST
  *            (e.g. "cap", "task", "file").  Must be non-NULL.

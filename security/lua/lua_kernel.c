@@ -677,7 +677,7 @@ static const luaL_Reg kernellib[] = {
 	{ NULL, NULL }
 };
 
-static int kernel_open_extras(lua_State *L)
+static int kernel_init_table(lua_State *L)
 {
 	static const struct {
 		const char *name;
@@ -709,7 +709,7 @@ static int kernel_open_extras(lua_State *L)
 static struct lua_api_lib kernel_desc = {
 	.name		= "kernel",
 	.funcs		= kernellib,
-	.open_extras	= kernel_open_extras,
+	.init_table	= kernel_init_table,
 	.owner		= THIS_MODULE,
 	.abi_version	= LUA_API_LIB_ABI_VERSION,
 };

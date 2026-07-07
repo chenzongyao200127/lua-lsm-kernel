@@ -578,7 +578,7 @@ static const luaL_Reg fslib[] = {
 	{ NULL, NULL }
 };
 
-static int fs_open_extras(lua_State *L)
+static int fs_init_table(lua_State *L)
 {
 	static const struct {
 		const char *name;
@@ -610,7 +610,7 @@ static int fs_open_extras(lua_State *L)
 static struct lua_api_lib fs_desc = {
 	.name		= "fs",
 	.funcs		= fslib,
-	.open_extras	= fs_open_extras,
+	.init_table	= fs_init_table,
 	.owner		= THIS_MODULE,
 	.abi_version	= LUA_API_LIB_ABI_VERSION,
 };

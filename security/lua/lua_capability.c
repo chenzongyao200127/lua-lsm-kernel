@@ -177,7 +177,7 @@ static const luaL_Reg capability_lib[] = {
 	{ NULL, NULL }
 };
 
-static int capability_open_extras(lua_State *L)
+static int capability_init_table(lua_State *L)
 {
 	int err = lua_api_lib_meta_install(L, "cap", cap_meth, NULL);
 
@@ -190,7 +190,7 @@ static int capability_open_extras(lua_State *L)
 static struct lua_api_lib capability_desc = {
 	.name		= "capability",
 	.funcs		= capability_lib,
-	.open_extras	= capability_open_extras,
+	.init_table	= capability_init_table,
 	.owner		= THIS_MODULE,
 	.abi_version	= LUA_API_LIB_ABI_VERSION,
 };

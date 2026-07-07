@@ -69,7 +69,7 @@ static const luaL_Reg errno_lib[] = {
 	{ NULL, NULL }
 };
 
-static int errno_open_extras(lua_State *L)
+static int errno_init_table(lua_State *L)
 {
 	setconst(L, errnos);
 	return 0;
@@ -78,7 +78,7 @@ static int errno_open_extras(lua_State *L)
 static struct lua_api_lib errno_desc = {
 	.name		= "errno",
 	.funcs		= errno_lib,
-	.open_extras	= errno_open_extras,
+	.init_table	= errno_init_table,
 	.owner		= THIS_MODULE,
 	.abi_version	= LUA_API_LIB_ABI_VERSION,
 };

@@ -58,14 +58,14 @@ static const struct const_value signals[] = {
 /*
  * Empty funcs sentinel - the signal library exposes constants only,
  * but the registration ABI requires a non-NULL funcs table.  Constants
- * are published on the library table from open_extras() after the
+ * are published on the library table from init_table() after the
  * (empty) funcs registration has been performed by the core.
  */
 static const luaL_Reg signal_lib[] = {
 	{ NULL, NULL }
 };
 
-static int signal_open_extras(lua_State *L)
+static int signal_init_table(lua_State *L)
 {
 	setconst(L, signals);
 	return 0;
@@ -74,7 +74,7 @@ static int signal_open_extras(lua_State *L)
 static struct lua_api_lib signal_desc = {
 	.name		= "signal",
 	.funcs		= signal_lib,
-	.open_extras	= signal_open_extras,
+	.init_table	= signal_init_table,
 	.owner		= THIS_MODULE,
 	.abi_version	= LUA_API_LIB_ABI_VERSION,
 };

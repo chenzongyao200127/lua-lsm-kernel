@@ -29,6 +29,7 @@
 #include <linux/workqueue.h>
 #include <linux/lua.h>
 #include <linux/lauxlib.h>
+#include <linux/lualib.h>
 #include <linux/lua_lsm_api.h>
 #include <uapi/linux/audit.h>
 
@@ -39,10 +40,11 @@
 enum lua_api_lib_audit_reason {
 	LUA_API_LIB_AUDIT_NONE,
 	LUA_API_LIB_AUDIT_NOT_READY,
-	LUA_API_LIB_AUDIT_LOCKDOWN,
 	LUA_API_LIB_AUDIT_UNSIGNED,
 	LUA_API_LIB_AUDIT_DUPLICATE,
+	LUA_API_LIB_AUDIT_RESERVED_NAME,
 	LUA_API_LIB_AUDIT_PIN_FAILED,
+	LUA_API_LIB_AUDIT_TEXT_OWNER,
 	LUA_API_LIB_AUDIT_SCRATCH,
 	LUA_API_LIB_AUDIT_REPLAY,
 	LUA_API_LIB_AUDIT_RESOURCE,
@@ -52,10 +54,11 @@ static const char *lua_api_lib_audit_reason_str(enum lua_api_lib_audit_reason r)
 {
 	switch (r) {
 	case LUA_API_LIB_AUDIT_NOT_READY:	return "not-ready";
-	case LUA_API_LIB_AUDIT_LOCKDOWN:	return "lockdown";
 	case LUA_API_LIB_AUDIT_UNSIGNED:	return "unsigned";
 	case LUA_API_LIB_AUDIT_DUPLICATE:	return "duplicate";
+	case LUA_API_LIB_AUDIT_RESERVED_NAME:	return "reserved-name";
 	case LUA_API_LIB_AUDIT_PIN_FAILED:	return "pin-failed";
+	case LUA_API_LIB_AUDIT_TEXT_OWNER:	return "text-owner";
 	case LUA_API_LIB_AUDIT_SCRATCH:		return "scratch";
 	case LUA_API_LIB_AUDIT_REPLAY:		return "replay";
 	case LUA_API_LIB_AUDIT_RESOURCE:	return "resource";
@@ -94,7 +97,6 @@ static int lua_api_lib_validate_common(const struct lua_api_lib *desc)
 	return 0;
 }
 
-/* Shared by the exported wrapper and the built-in path; owner is checked there. */
 static int lua_api_lib_validate_shared(const struct lua_api_lib *desc)
 {
 	int err = lua_api_lib_validate_common(desc);
@@ -104,22 +106,13 @@ static int lua_api_lib_validate_shared(const struct lua_api_lib *desc)
 
 	if (!desc->funcs)
 		return -EINVAL;
-	if (desc->openf)
+	if (desc->reserved_open)
 		return -EINVAL;
 
 	return 0;
 }
 
-static int lua_api_lib_gate_lockdown(const struct lua_api_lib *desc)
-{
-	if (!desc->owner)
-		return 0;
-	if (security_locked_down(LOCKDOWN_MODULE_SIGNATURE))
-		return -EPERM;
-	return 0;
-}
-
-/* Built-in (owner==NULL) descriptors are covered by the vmlinux signature. */
+/* Built-in descriptors are part of vmlinux; only modules need this gate. */
 static int lua_api_lib_gate_signed(const struct lua_api_lib *desc)
 {
 	if (!IS_ENABLED(CONFIG_LUA_LSM_REQUIRE_SIGNED_API))
@@ -131,10 +124,42 @@ static int lua_api_lib_gate_signed(const struct lua_api_lib *desc)
 	return 0;
 }
 
-/*
- * Best-effort: argument-shape failures bail out before this point so a
- * caller bug cannot flood kaudit with denial records.
- */
+static bool lua_api_lib_ptr_in_owner_text(const struct lua_api_lib *desc,
+					  const void *ptr)
+{
+	void *entry;
+	unsigned long addr;
+
+	if (!ptr)
+		return true;
+	if (!desc->owner)
+		return true;
+
+	entry = dereference_module_function_descriptor(desc->owner, (void *)ptr);
+	addr = (unsigned long)entry;
+
+	/* Lua closures can outlive module init text. */
+	return within_module_mem_type(addr, desc->owner, MOD_TEXT);
+}
+
+static int lua_api_lib_validate_text_owner(const struct lua_api_lib *desc)
+{
+	unsigned int i;
+
+	for (i = 0; desc->funcs[i].name; i++) {
+		if (!desc->funcs[i].func)
+			return -EINVAL;
+		if (!lua_api_lib_ptr_in_owner_text(desc, desc->funcs[i].func))
+			return -EINVAL;
+	}
+
+	if (!lua_api_lib_ptr_in_owner_text(desc, desc->init_table))
+		return -EINVAL;
+
+	return 0;
+}
+
+/* Shape validation runs before audit to avoid logging malformed descriptors. */
 static void lua_api_lib_audit(const struct lua_api_lib *desc, int result,
 			      enum lua_api_lib_audit_reason reason)
 {
@@ -185,11 +210,26 @@ static bool lua_api_lib_name_exists_locked(const char *name)
 	return false;
 }
 
-/*
- * Stripped-down require(): install desc->funcs under desc->name in
- * _LOADED.  Stack depth is restored on every exit so the caller (and a
- * misbehaving open_extras) cannot corrupt subsequent registry walks.
- */
+static bool lua_api_lib_name_reserved(const char *name)
+{
+	static const char * const reserved[] = {
+		"_G",
+		LUA_COLIBNAME,
+		LUA_TABLIBNAME,
+		LUA_STRLIBNAME,
+		LUA_DBLIBNAME,
+	};
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(reserved); i++) {
+		if (!strcmp(name, reserved[i]))
+			return true;
+	}
+
+	return false;
+}
+
+/* Stack depth is restored on every exit, including init_table failures. */
 static int lib_install_funcs(lua_State *L, struct lua_api_lib *desc)
 {
 	int original_top = lua_gettop(L);
@@ -214,9 +254,9 @@ static int lib_install_funcs(lua_State *L, struct lua_api_lib *desc)
 	luaL_register(L, NULL, desc->funcs);
 	lua_settop(L, libtab_idx);
 
-	if (desc->open_extras) {
-		err = desc->open_extras(L);
-		/* Honour the documented {0, -ENOMEM, other -errno} contract. */
+	if (desc->init_table) {
+		err = desc->init_table(L);
+		/* Normalize init_table errors to the public contract. */
 		if (err > 0 || (err < 0 && err != -ENOMEM))
 			err = -EPROTO;
 		if (err < 0)
@@ -669,15 +709,15 @@ int __lua_api_lib_register(struct lua_api_lib *desc)
 		goto audit;
 	}
 
-	err = lua_api_lib_gate_lockdown(desc);
-	if (err) {
-		reason = LUA_API_LIB_AUDIT_LOCKDOWN;
-		goto audit;
-	}
-
 	err = lua_api_lib_gate_signed(desc);
 	if (err) {
 		reason = LUA_API_LIB_AUDIT_UNSIGNED;
+		goto audit;
+	}
+
+	if (lua_api_lib_name_reserved(desc->name)) {
+		err = -EEXIST;
+		reason = LUA_API_LIB_AUDIT_RESERVED_NAME;
 		goto audit;
 	}
 
@@ -695,23 +735,31 @@ int __lua_api_lib_register(struct lua_api_lib *desc)
 		goto unlock;
 	}
 
-	/* Validate desc behaviour before pinning the owner or live VMs. */
+	if (!try_module_get(desc->owner)) {
+		err = -ENODEV;
+		reason = LUA_API_LIB_AUDIT_PIN_FAILED;
+		goto unlock;
+	}
+
+	err = lua_api_lib_validate_text_owner(desc);
+	if (err) {
+		reason = LUA_API_LIB_AUDIT_TEXT_OWNER;
+		module_put(desc->owner);
+		goto unlock;
+	}
+
 	scratch = lvm_state_build_new();
 	if (IS_ERR(scratch)) {
 		err = PTR_ERR(scratch);
 		reason = LUA_API_LIB_AUDIT_SCRATCH;
+		module_put(desc->owner);
 		goto unlock;
 	}
 	err = lib_install_protected(scratch->L, desc);
 	lvm_state_free_heap(scratch);
 	if (err) {
 		reason = LUA_API_LIB_AUDIT_SCRATCH;
-		goto unlock;
-	}
-
-	if (!try_module_get(desc->owner)) {
-		err = -ENODEV;
-		reason = LUA_API_LIB_AUDIT_PIN_FAILED;
+		module_put(desc->owner);
 		goto unlock;
 	}
 
@@ -757,11 +805,6 @@ audit:
 	return err;
 }
 
-/*
- * Loadable producers must carry a non-NULL owner so try_module_get()
- * pins real text; built-in (=y) producers reach __lua_api_lib_register()
- * directly because THIS_MODULE is NULL in vmlinux.
- */
 int lua_api_lib_register(struct lua_api_lib *desc)
 {
 	if (!desc || !desc->owner)
@@ -782,7 +825,7 @@ int lua_api_libraries_show(struct seq_file *m, void *v)
 	seq_puts(m, "API libraries for lua-lsm\n");
 	seq_printf(m, "API set version: %u\n", version);
 	seq_printf(m, "%-20s %-20s %5s %10s %4s\n",
-		   "name", "provider", "funcs", "extra-init", "abi");
+		   "name", "provider", "funcs", "init-table", "abi");
 	seq_printf(m, "%s\n", TABLINE);
 
 	idx = srcu_read_lock(&modules_ss);
@@ -797,7 +840,7 @@ int lua_api_libraries_show(struct seq_file *m, void *v)
 			   desc->name,
 			   desc->owner ? desc->owner->name : "builtin",
 			   nfuncs,
-			   desc->open_extras ? "yes" : "no",
+			   desc->init_table ? "yes" : "no",
 			   desc->abi_version);
 	}
 	srcu_read_unlock(&modules_ss, idx);

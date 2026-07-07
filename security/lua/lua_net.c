@@ -487,7 +487,7 @@ static const luaL_Reg netlib[] = {
 	{ NULL, NULL }
 };
 
-static int net_open_extras(lua_State *L)
+static int net_init_table(lua_State *L)
 {
 	static const struct {
 		const char *name;
@@ -512,7 +512,7 @@ static int net_open_extras(lua_State *L)
 static struct lua_api_lib net_desc = {
 	.name		= "net",
 	.funcs		= netlib,
-	.open_extras	= net_open_extras,
+	.init_table	= net_init_table,
 	.owner		= THIS_MODULE,
 	.abi_version	= LUA_API_LIB_ABI_VERSION,
 };
