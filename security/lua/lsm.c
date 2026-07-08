@@ -270,6 +270,14 @@ static DEFINE_PER_CPU(struct lvm_state *, irq_lvms);
 
 static lua_State *lvm_build_lua_state(struct lvm_state *lvm);
 static void *lvm_alloc(void *ud, void *ptr, size_t osize, size_t nsize);
+static void lua_lsm_module_schedule_finalize(void);
+static void lua_lsm_module_finalize_workfn(struct work_struct *work);
+static DECLARE_WORK(lua_lsm_module_finalize_work,
+		    lua_lsm_module_finalize_workfn);
+static DEFINE_SPINLOCK(lua_lsm_module_finalize_lock);
+static bool lua_lsm_module_finalize_pending;
+static bool lua_lsm_module_finalize_running;
+
 static int lua_state_alloc(struct lvm_state *lvm);
 static void lua_state_free(struct lvm_state *lvm);
 
@@ -532,12 +540,22 @@ static int lvm_purge_module(lua_State *L, struct lua_lsm_module *module)
 	if (!err) {
 		nloaded = atomic_dec_return(&module->nloaded);
 		WARN_ON_ONCE(nloaded < 0);
+		if (nloaded == 0 && READ_ONCE(module->state) == LMS_STATE_ZOMBIE)
+			lua_lsm_module_schedule_finalize();
 
 		__log_info("<%s>: %d-%d purged module <%s>, nloaded = %d\n",
 			   current->comm, task_tgid_nr(current),
 			   task_pid_nr(current), module->name, nloaded);
 	}
 	return err;
+}
+
+static bool lvm_module_needs_purge(struct lua_lsm_module *module)
+{
+	enum lua_lsm_module_state state = READ_ONCE(module->state);
+
+	return atomic_read(&module->nloaded) > 0 &&
+	       (state == LMS_STATE_GOING || state == LMS_STATE_ZOMBIE);
 }
 
 static void lvm_purge_unloading(lua_State *L)
@@ -551,8 +569,7 @@ static void lvm_purge_unloading(lua_State *L)
 	idx = srcu_read_lock(&modules_ss);
 	list_for_each_entry_srcu(module, &lsm_modules, list,
 				 srcu_read_lock_held(&modules_ss)) {
-		if (READ_ONCE(module->state) == LMS_STATE_GOING ||
-		    READ_ONCE(module->state) == LMS_STATE_ZOMBIE)
+		if (lvm_module_needs_purge(module))
 			lvm_purge_module(L, module);
 	}
 	srcu_read_unlock(&modules_ss, idx);
@@ -880,6 +897,7 @@ static int lua_modules_index(lua_State *L)
 static void lua_modules_free(struct task_struct *task, lua_State *L)
 {
 	struct lua_lsm_module *module;
+	int nloaded;
 
 	lua_getfield(L, LUA_REGISTRYINDEX, "_MODULES");
 	if (!lua_istable(L, -1)) {
@@ -887,14 +905,22 @@ static void lua_modules_free(struct task_struct *task, lua_State *L)
 		return;
 	}
 
-	list_for_each_entry_srcu(module, &lsm_modules, list, srcu_read_lock_held(&modules_ss)) {
+	list_for_each_entry_srcu(module, &lsm_modules, list,
+				 srcu_read_lock_held(&modules_ss)) {
 		lua_pushstring(L, module->name);
 		lua_rawget(L, -2);
 		if (lua_istable(L, -1)) {
-			atomic_dec(&module->nloaded);
-			__log_info("<%s>: %d-%d freed module <%s>, nloaded = %d\n",
-				   task->comm, task_tgid_nr(task), task_pid_nr(task),
-				   module->name, atomic_read(&module->nloaded));
+			nloaded = atomic_dec_return(&module->nloaded);
+			WARN_ON_ONCE(nloaded < 0);
+			if (nloaded == 0 && READ_ONCE(module->state) == LMS_STATE_ZOMBIE)
+				lua_lsm_module_schedule_finalize();
+			if (task)
+				__log_info("<%s>: %d-%d dropped module <%s>, nloaded = %d\n",
+					   task->comm, task_tgid_nr(task), task_pid_nr(task),
+					   module->name, nloaded);
+			else
+				__log_info("dropped module <%s>, nloaded = %d\n",
+					   module->name, nloaded);
 		}
 		lua_pop(L, 1);
 	}
@@ -1304,6 +1330,12 @@ static void softirq_lvm_remove_module(struct work_struct *work)
 	local_bh_enable();
 }
 
+static bool lua_lsm_module_drained(struct lua_lsm_module *module)
+{
+	return READ_ONCE(module->state) == LMS_STATE_ZOMBIE &&
+	       atomic_read(&module->nloaded) == 0;
+}
+
 static void lua_lsm_module_unlink_shdicts(struct lua_lsm_module *module)
 {
 	struct lua_lsm_module_shdict *shdict, *tmp;
@@ -1328,16 +1360,83 @@ static void lua_lsm_module_disable_hooks(struct lua_lsm_module *module)
 	}
 }
 
-static void lua_lsm_module_finish_unregister(struct lua_lsm_module *module)
+static void lua_lsm_module_detach_locked(struct lua_lsm_module *module)
 {
 	WARN_ON_ONCE(atomic_read(&module->nloaded) != 0);
+	WARN_ON_ONCE(READ_ONCE(module->state) != LMS_STATE_GOING &&
+		     READ_ONCE(module->state) != LMS_STATE_ZOMBIE);
 
 	lua_lsm_module_disable_hooks(module);
 	list_del_rcu(&module->list);
 	lua_lsm_module_unlink_shdicts(module);
+	atomic_dec(&modules_unloading);
+}
+
+static void lua_lsm_module_free_detached(struct lua_lsm_module *module)
+{
 	synchronize_srcu(&modules_ss);
 	lua_lsm_module_free(module);
-	atomic_dec(&modules_unloading);
+}
+
+static void lua_lsm_module_schedule_finalize(void)
+{
+	unsigned long flags;
+	bool queue = false;
+
+	spin_lock_irqsave(&lua_lsm_module_finalize_lock, flags);
+	lua_lsm_module_finalize_pending = true;
+	if (!lua_lsm_module_finalize_running) {
+		lua_lsm_module_finalize_running = true;
+		queue = true;
+	}
+	spin_unlock_irqrestore(&lua_lsm_module_finalize_lock, flags);
+
+	if (queue)
+		schedule_work(&lua_lsm_module_finalize_work);
+}
+
+static void lua_lsm_module_finalize_workfn(struct work_struct *work)
+{
+	struct lua_lsm_module *module;
+	unsigned long flags;
+	bool found;
+
+	for (;;) {
+		found = false;
+
+		spin_lock_irqsave(&lua_lsm_module_finalize_lock, flags);
+		lua_lsm_module_finalize_pending = false;
+		spin_unlock_irqrestore(&lua_lsm_module_finalize_lock, flags);
+
+		mutex_lock(&modules_mutex);
+		list_for_each_entry(module, &lsm_modules, list) {
+			if (lua_lsm_module_drained(module)) {
+				lua_lsm_module_detach_locked(module);
+				found = true;
+				break;
+			}
+		}
+		mutex_unlock(&modules_mutex);
+
+		if (found) {
+			lua_lsm_module_free_detached(module);
+			continue;
+		}
+
+		spin_lock_irqsave(&lua_lsm_module_finalize_lock, flags);
+		if (!lua_lsm_module_finalize_pending) {
+			lua_lsm_module_finalize_running = false;
+			spin_unlock_irqrestore(&lua_lsm_module_finalize_lock, flags);
+			return;
+		}
+		spin_unlock_irqrestore(&lua_lsm_module_finalize_lock, flags);
+	}
+}
+
+static void lua_lsm_module_finish_unregister(struct lua_lsm_module *module)
+{
+	lua_lsm_module_detach_locked(module);
+	lua_lsm_module_free_detached(module);
 }
 
 int lua_lsm_module_unregister(const char *name)
@@ -1370,12 +1469,8 @@ int lua_lsm_module_unregister(const char *name)
 		return -ENOENT;
 	}
 
-	if (READ_ONCE(module->state) == LMS_STATE_ZOMBIE &&
-	    atomic_read(&module->nloaded) == 0) {
-		lua_lsm_module_finish_unregister(module);
-		mutex_unlock(&modules_mutex);
-		return 0;
-	}
+	if (lua_lsm_module_drained(module))
+		goto out_detach;
 
 	pr_info("Prepare to unregister module <%s> ...\n", name);
 
@@ -1430,13 +1525,22 @@ int lua_lsm_module_unregister(const char *name)
 	}
 
 	remaining = atomic_read(&module->nloaded);
-	if (remaining == 0) {
-		lua_lsm_module_finish_unregister(module);
-		err = 0;
-	} else {
-		WRITE_ONCE(module->state, LMS_STATE_ZOMBIE);
-		err = -EBUSY;
-	}
+	if (remaining == 0)
+		goto out_detach;
+
+	WRITE_ONCE(module->state, LMS_STATE_ZOMBIE);
+	if (lua_lsm_module_drained(module))
+		goto out_detach;
+
+	remaining = atomic_read(&module->nloaded);
+	err = -EBUSY;
+	goto out_unlock;
+
+out_detach:
+	remaining = 0;
+	lua_lsm_module_finish_unregister(module);
+	err = 0;
+out_unlock:
 	mutex_unlock(&modules_mutex);
 
 	pr_info("Unregister module <%s>: purged %d Lua VMs, remaining = %d, vm_nusage = %d\n",
