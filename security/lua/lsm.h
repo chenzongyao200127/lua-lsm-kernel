@@ -118,12 +118,14 @@ struct lua_lsm_module {
 	int version;
 	enum lua_lsm_module_state state;
 	struct list_head list;
+	struct rcu_head rcu;
 
 	__BITMAP_TYPE(, uint32_t, __LL_NR_MAX) hookfuncs;
 	int nhooks;
 	char *chunk;
 	size_t chunk_len;
-	atomic_t nloaded;
+	/* Lua VMs that currently have this module in their _MODULES table. */
+	atomic_t loaded_vm_count;
 	struct list_head shdicts;
 
 	/* Protects shdicts and shdict_count. */

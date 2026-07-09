@@ -25,6 +25,8 @@
 #include <linux/lua.h>
 #include <linux/lualib.h>
 #include <linux/lauxlib.h>
+#include <linux/lockdep.h>
+#include <linux/srcu.h>
 #include "lsm.h"
 #include "lua_object.h"
 #include "lsm_defs.h"
@@ -270,13 +272,10 @@ static DEFINE_PER_CPU(struct lvm_state *, irq_lvms);
 
 static lua_State *lvm_build_lua_state(struct lvm_state *lvm);
 static void *lvm_alloc(void *ud, void *ptr, size_t osize, size_t nsize);
-static void lua_lsm_module_schedule_finalize(void);
+static int lua_lsm_module_drop_from_vm(struct lua_lsm_module *module);
 static void lua_lsm_module_finalize_workfn(struct work_struct *work);
 static DECLARE_WORK(lua_lsm_module_finalize_work,
 		    lua_lsm_module_finalize_workfn);
-static DEFINE_SPINLOCK(lua_lsm_module_finalize_lock);
-static bool lua_lsm_module_finalize_pending;
-static bool lua_lsm_module_finalize_running;
 
 static int lua_state_alloc(struct lvm_state *lvm);
 static void lua_state_free(struct lvm_state *lvm);
@@ -491,7 +490,7 @@ lvm_get_task_state(const struct task_struct *task, bool create)
 	return lvm;
 }
 
-static int lvm_remove_module(lua_State *L, struct lua_lsm_module *module)
+static int lvm_forget_module(lua_State *L, struct lua_lsm_module *module)
 {
 	int err = -ENOENT;
 	int modules_idx;
@@ -528,37 +527,33 @@ static int lvm_remove_module(lua_State *L, struct lua_lsm_module *module)
 	return err;
 }
 
-static int lvm_purge_module(lua_State *L, struct lua_lsm_module *module)
+static int lvm_drop_module(lua_State *L, struct lua_lsm_module *module)
 {
-	int nloaded;
 	int err;
 
 	if (!module)
 		return -ENOENT;
 
-	err = lvm_remove_module(L, module);
+	err = lvm_forget_module(L, module);
 	if (!err) {
-		nloaded = atomic_dec_return(&module->nloaded);
-		WARN_ON_ONCE(nloaded < 0);
-		if (nloaded == 0 && READ_ONCE(module->state) == LMS_STATE_ZOMBIE)
-			lua_lsm_module_schedule_finalize();
+		int loaded_vms = lua_lsm_module_drop_from_vm(module);
 
-		__log_info("<%s>: %d-%d purged module <%s>, nloaded = %d\n",
+		__log_info("<%s>: %d-%d dropped module <%s>, loaded_vms = %d\n",
 			   current->comm, task_tgid_nr(current),
-			   task_pid_nr(current), module->name, nloaded);
+			   task_pid_nr(current), module->name, loaded_vms);
 	}
 	return err;
 }
 
-static bool lvm_module_needs_purge(struct lua_lsm_module *module)
+static bool lvm_should_drop_module(struct lua_lsm_module *module)
 {
 	enum lua_lsm_module_state state = READ_ONCE(module->state);
 
-	return atomic_read(&module->nloaded) > 0 &&
+	return atomic_read(&module->loaded_vm_count) > 0 &&
 	       (state == LMS_STATE_GOING || state == LMS_STATE_ZOMBIE);
 }
 
-static void lvm_purge_unloading(lua_State *L)
+static void lvm_drop_unloading_modules(lua_State *L)
 {
 	struct lua_lsm_module *module;
 	int idx;
@@ -569,8 +564,8 @@ static void lvm_purge_unloading(lua_State *L)
 	idx = srcu_read_lock(&modules_ss);
 	list_for_each_entry_srcu(module, &lsm_modules, list,
 				 srcu_read_lock_held(&modules_ss)) {
-		if (lvm_module_needs_purge(module))
-			lvm_purge_module(L, module);
+		if (lvm_should_drop_module(module))
+			lvm_drop_module(L, module);
 	}
 	srcu_read_unlock(&modules_ss, idx);
 }
@@ -659,7 +654,7 @@ lua_State *lvm_get(void)
 	if (in_task()) {
 		L = lvm_get_from_task(current, false);
 		if (L)
-			lvm_purge_unloading(L);
+			lvm_drop_unloading_modules(L);
 		return L;
 	} else {
 		return get_cpu_var(irq_lvms)->L;
@@ -882,7 +877,7 @@ static int lua_modules_index(lua_State *L)
 		/* stack: [table, thunk, key, thunk] */
 		lua_rawset(L, 1);		/* table[key] = thunk */
 
-		atomic_inc(&module->nloaded);
+		atomic_inc(&module->loaded_vm_count);
 		return 1;			/* return the thunk */
 	}
 
@@ -891,13 +886,11 @@ static int lua_modules_index(lua_State *L)
 }
 
 /*
- * When LuaVM is destroyed, iterate over the modules loaded in the VM
- * and update the load count in the module.
+ * Drop each policy module reference recorded in a Lua VM's _MODULES table.
  */
-static void lua_modules_free(struct task_struct *task, lua_State *L)
+static void lvm_put_loaded_modules(struct task_struct *task, lua_State *L)
 {
 	struct lua_lsm_module *module;
-	int nloaded;
 
 	lua_getfield(L, LUA_REGISTRYINDEX, "_MODULES");
 	if (!lua_istable(L, -1)) {
@@ -910,17 +903,15 @@ static void lua_modules_free(struct task_struct *task, lua_State *L)
 		lua_pushstring(L, module->name);
 		lua_rawget(L, -2);
 		if (lua_istable(L, -1)) {
-			nloaded = atomic_dec_return(&module->nloaded);
-			WARN_ON_ONCE(nloaded < 0);
-			if (nloaded == 0 && READ_ONCE(module->state) == LMS_STATE_ZOMBIE)
-				lua_lsm_module_schedule_finalize();
+			int loaded_vms = lua_lsm_module_drop_from_vm(module);
+
 			if (task)
-				__log_info("<%s>: %d-%d dropped module <%s>, nloaded = %d\n",
+				__log_info("<%s>: %d-%d dropped module <%s>, loaded_vms = %d\n",
 					   task->comm, task_tgid_nr(task), task_pid_nr(task),
-					   module->name, nloaded);
+					   module->name, loaded_vms);
 			else
-				__log_info("dropped module <%s>, nloaded = %d\n",
-					   module->name, nloaded);
+				__log_info("dropped module <%s>, loaded_vms = %d\n",
+					   module->name, loaded_vms);
 		}
 		lua_pop(L, 1);
 	}
@@ -1248,7 +1239,7 @@ int lua_lsm_module_register(const char *code, size_t len)
 		goto err_free_module;
 	memcpy(module->chunk, chunk, chunk_len);
 	module->chunk_len = chunk_len;
-	atomic_set(&module->nloaded, 0);
+	atomic_set(&module->loaded_vm_count, 0);
 
 	INIT_LIST_HEAD(&module->shdicts);
 	spin_lock_init(&module->shdict_lock);
@@ -1309,7 +1300,7 @@ err_free_lua:
 static struct lua_lsm_module *work_ctx_remove_module;
 static atomic_t work_ctx_remove_count;
 
-static void softirq_lvm_remove_module(struct work_struct *work)
+static void softirq_lvm_drop_module(struct work_struct *work)
 {
 	struct lua_lsm_module *module = work_ctx_remove_module;
 	int cpu = smp_processor_id();
@@ -1321,7 +1312,7 @@ static void softirq_lvm_remove_module(struct work_struct *work)
 	 * changing the Lua VM environment.
 	 */
 	local_bh_disable();
-	err = lvm_purge_module(per_cpu(irq_lvms, cpu)->L, module);
+	err = lvm_drop_module(per_cpu(irq_lvms, cpu)->L, module);
 	if (!err) {
 		atomic_inc(&work_ctx_remove_count);
 		__log_info("<%s>: err = [ OK ] \t<softirq-%d>, count = %d\n",
@@ -1330,19 +1321,42 @@ static void softirq_lvm_remove_module(struct work_struct *work)
 	local_bh_enable();
 }
 
-static bool lua_lsm_module_drained(struct lua_lsm_module *module)
+static bool lua_lsm_module_ready_to_finalize(struct lua_lsm_module *module)
 {
 	return READ_ONCE(module->state) == LMS_STATE_ZOMBIE &&
-	       atomic_read(&module->nloaded) == 0;
+	       atomic_read(&module->loaded_vm_count) == 0;
 }
 
-static void lua_lsm_module_unlink_shdicts(struct lua_lsm_module *module)
+static int lua_lsm_module_drop_from_vm(struct lua_lsm_module *module)
+{
+	int loaded_vms = atomic_dec_return(&module->loaded_vm_count);
+
+	WARN_ON_ONCE(loaded_vms < 0);
+	if (loaded_vms == 0 && lua_lsm_module_ready_to_finalize(module))
+		schedule_work(&lua_lsm_module_finalize_work);
+
+	return loaded_vms;
+}
+
+static void lua_lsm_module_mark_shdicts_dead(struct lua_lsm_module *module)
+{
+	struct lua_lsm_module_shdict *shdict;
+	unsigned long flags;
+
+	spin_lock_irqsave(&module->shdict_lock, flags);
+	list_for_each_entry(shdict, &module->shdicts, list)
+		WRITE_ONCE(shdict->dead, true);
+	spin_unlock_irqrestore(&module->shdict_lock, flags);
+}
+
+static void lua_lsm_module_release_shdicts(struct lua_lsm_module *module)
 {
 	struct lua_lsm_module_shdict *shdict, *tmp;
 	unsigned long flags;
 
 	spin_lock_irqsave(&module->shdict_lock, flags);
 	list_for_each_entry_safe(shdict, tmp, &module->shdicts, list) {
+		WRITE_ONCE(shdict->dead, true);
 		list_del_rcu(&shdict->list);
 		atomic_dec(&module->shdict_count);
 		lua_lsm_shdict_put(shdict);
@@ -1350,7 +1364,7 @@ static void lua_lsm_module_unlink_shdicts(struct lua_lsm_module *module)
 	spin_unlock_irqrestore(&module->shdict_lock, flags);
 }
 
-static void lua_lsm_module_disable_hooks(struct lua_lsm_module *module)
+static void lua_lsm_module_unregister_hooks(struct lua_lsm_module *module)
 {
 	int i;
 
@@ -1360,91 +1374,49 @@ static void lua_lsm_module_disable_hooks(struct lua_lsm_module *module)
 	}
 }
 
-static void lua_lsm_module_detach_locked(struct lua_lsm_module *module)
+static void lua_lsm_module_free_srcu(struct rcu_head *rcu)
 {
-	WARN_ON_ONCE(atomic_read(&module->nloaded) != 0);
-	WARN_ON_ONCE(READ_ONCE(module->state) != LMS_STATE_GOING &&
-		     READ_ONCE(module->state) != LMS_STATE_ZOMBIE);
+	struct lua_lsm_module *module;
 
-	lua_lsm_module_disable_hooks(module);
-	list_del_rcu(&module->list);
-	lua_lsm_module_unlink_shdicts(module);
-	atomic_dec(&modules_unloading);
-}
-
-static void lua_lsm_module_free_detached(struct lua_lsm_module *module)
-{
-	synchronize_srcu(&modules_ss);
+	module = container_of(rcu, struct lua_lsm_module, rcu);
 	lua_lsm_module_free(module);
 }
 
-static void lua_lsm_module_schedule_finalize(void)
+/*
+ * Remove the module from all global lookup paths.  The object itself stays
+ * alive until pre-existing modules_ss readers have left their critical section.
+ */
+static void lua_lsm_module_finalize_locked(struct lua_lsm_module *module)
 {
-	unsigned long flags;
-	bool queue = false;
+	lockdep_assert_held(&modules_mutex);
 
-	spin_lock_irqsave(&lua_lsm_module_finalize_lock, flags);
-	lua_lsm_module_finalize_pending = true;
-	if (!lua_lsm_module_finalize_running) {
-		lua_lsm_module_finalize_running = true;
-		queue = true;
-	}
-	spin_unlock_irqrestore(&lua_lsm_module_finalize_lock, flags);
+	WARN_ON_ONCE(atomic_read(&module->loaded_vm_count) != 0);
+	WARN_ON_ONCE(READ_ONCE(module->state) != LMS_STATE_GOING &&
+		     READ_ONCE(module->state) != LMS_STATE_ZOMBIE);
 
-	if (queue)
-		schedule_work(&lua_lsm_module_finalize_work);
+	lua_lsm_module_unregister_hooks(module);
+	list_del_rcu(&module->list);
+	lua_lsm_module_release_shdicts(module);
+	atomic_dec(&modules_unloading);
+	call_srcu(&modules_ss, &module->rcu, lua_lsm_module_free_srcu);
 }
 
 static void lua_lsm_module_finalize_workfn(struct work_struct *work)
 {
-	struct lua_lsm_module *module;
-	unsigned long flags;
-	bool found;
+	struct lua_lsm_module *module, *tmp;
 
-	for (;;) {
-		found = false;
-
-		spin_lock_irqsave(&lua_lsm_module_finalize_lock, flags);
-		lua_lsm_module_finalize_pending = false;
-		spin_unlock_irqrestore(&lua_lsm_module_finalize_lock, flags);
-
-		mutex_lock(&modules_mutex);
-		list_for_each_entry(module, &lsm_modules, list) {
-			if (lua_lsm_module_drained(module)) {
-				lua_lsm_module_detach_locked(module);
-				found = true;
-				break;
-			}
-		}
-		mutex_unlock(&modules_mutex);
-
-		if (found) {
-			lua_lsm_module_free_detached(module);
-			continue;
-		}
-
-		spin_lock_irqsave(&lua_lsm_module_finalize_lock, flags);
-		if (!lua_lsm_module_finalize_pending) {
-			lua_lsm_module_finalize_running = false;
-			spin_unlock_irqrestore(&lua_lsm_module_finalize_lock, flags);
-			return;
-		}
-		spin_unlock_irqrestore(&lua_lsm_module_finalize_lock, flags);
+	mutex_lock(&modules_mutex);
+	list_for_each_entry_safe(module, tmp, &lsm_modules, list) {
+		if (lua_lsm_module_ready_to_finalize(module))
+			lua_lsm_module_finalize_locked(module);
 	}
-}
-
-static void lua_lsm_module_finish_unregister(struct lua_lsm_module *module)
-{
-	lua_lsm_module_detach_locked(module);
-	lua_lsm_module_free_detached(module);
+	mutex_unlock(&modules_mutex);
 }
 
 int lua_lsm_module_unregister(const char *name)
 {
 	struct lua_lsm_module *module;
-	struct lua_lsm_module_shdict *shdict;
-	int count = 0, nloaded, remaining;
-	unsigned long flags;
+	int count = 0, loaded_vms, remaining;
 	int found = 0;
 	int err;
 
@@ -1458,7 +1430,7 @@ int lua_lsm_module_unregister(const char *name)
 	if (found && READ_ONCE(module->state) == LMS_STATE_LIVE) {
 		/*
 		 * Keep the hook counts until final removal so tasks keep
-		 * entering Lua-LSM and can purge their own VMs.
+		 * entering Lua-LSM and can drop the module from their own VMs.
 		 */
 		WRITE_ONCE(module->state, LMS_STATE_GOING);
 		atomic_inc(&modules_unloading);
@@ -1469,7 +1441,7 @@ int lua_lsm_module_unregister(const char *name)
 		return -ENOENT;
 	}
 
-	if (lua_lsm_module_drained(module))
+	if (lua_lsm_module_ready_to_finalize(module))
 		goto out_detach;
 
 	pr_info("Prepare to unregister module <%s> ...\n", name);
@@ -1477,38 +1449,35 @@ int lua_lsm_module_unregister(const char *name)
 	synchronize_srcu(&modules_ss);
 
 	/*
-	 * Existing Lua userdata may outlive the VM purge attempt.  Tombstone
+	 * Existing Lua userdata may outlive the VM drop attempt.  Tombstone
 	 * shared dicts now and drop the module list refs only once unregister
 	 * can complete.
 	 */
-	spin_lock_irqsave(&module->shdict_lock, flags);
-	list_for_each_entry(shdict, &module->shdicts, list)
-		WRITE_ONCE(shdict->dead, true);
-	spin_unlock_irqrestore(&module->shdict_lock, flags);
+	lua_lsm_module_mark_shdicts_dead(module);
 
 	kvcache_module_nodes_gc(module);
 
-	nloaded = atomic_read(&module->nloaded);
-	if (nloaded > 0) {
+	loaded_vms = atomic_read(&module->loaded_vm_count);
+	if (loaded_vms > 0) {
 		lua_State *L = lvm_get_from_task(current, true);
 
 		if (L) {
-			err = lvm_purge_module(L, module);
+			err = lvm_drop_module(L, module);
 			lvm_put_to_task(current, L);
 			if (!err)
 				count++;
 		}
 
 		__log_info("Unregister module <%s> from current task, freed = %d/%d\n",
-			   name, count, nloaded);
+			   name, count, loaded_vms);
 	}
 
 	/*
 	 * At this time, LuaVM may still be released asynchronously,
-	 * so the nloaded will be updated in the air.
+	 * so loaded_vm_count may change concurrently.
 	 */
-	nloaded = atomic_read(&module->nloaded);
-	if (nloaded > 0) {
+	loaded_vms = atomic_read(&module->loaded_vm_count);
+	if (loaded_vms > 0) {
 		/*
 		 * Since global variables are used, locking ensures that only
 		 * one instance of the softirq LuaVM offload is executed.
@@ -1516,34 +1485,34 @@ int lua_lsm_module_unregister(const char *name)
 		work_ctx_remove_module = module;
 		atomic_set(&work_ctx_remove_count, 0);
 
-		err = schedule_on_each_cpu(softirq_lvm_remove_module);
+		err = schedule_on_each_cpu(softirq_lvm_drop_module);
 		WARN_ON(err);
 		count += atomic_read(&work_ctx_remove_count);
 
 		__log_info("Unregister module <%s> from pcpu, freed = %d/%d\n",
-			   name, count, nloaded);
+			   name, count, loaded_vms);
 	}
 
-	remaining = atomic_read(&module->nloaded);
+	remaining = atomic_read(&module->loaded_vm_count);
 	if (remaining == 0)
 		goto out_detach;
 
 	WRITE_ONCE(module->state, LMS_STATE_ZOMBIE);
-	if (lua_lsm_module_drained(module))
+	if (lua_lsm_module_ready_to_finalize(module))
 		goto out_detach;
 
-	remaining = atomic_read(&module->nloaded);
+	remaining = atomic_read(&module->loaded_vm_count);
 	err = -EBUSY;
 	goto out_unlock;
 
 out_detach:
 	remaining = 0;
-	lua_lsm_module_finish_unregister(module);
+	lua_lsm_module_finalize_locked(module);
 	err = 0;
 out_unlock:
 	mutex_unlock(&modules_mutex);
 
-	pr_info("Unregister module <%s>: purged %d Lua VMs, remaining = %d, vm_nusage = %d\n",
+	pr_info("Unregister module <%s>: dropped from %d Lua VMs, remaining = %d, vm_nusage = %d\n",
 		name, count, remaining, atomic_read(&vm_nusage));
 
 	return err;
@@ -1564,7 +1533,7 @@ int modules_show(struct seq_file *m, void *v)
 	list_for_each_entry_srcu(module, &lsm_modules, list, srcu_read_lock_held(&modules_ss)) {
 		seq_printf(m, "%-20s %-10s %6zu %4d %5d %6d %6d %-34s\n",
 			   module->name, module->license, module->chunk_len,
-			   module->nhooks, atomic_read(&module->nloaded),
+			   module->nhooks, atomic_read(&module->loaded_vm_count),
 			   atomic_read(&module->shdict_count),
 			   atomic_read(&module->kvnodes_count), module->author);
 	}
@@ -1596,8 +1565,11 @@ void task_blob_free(struct task_struct *task)
 	/* Pairs with cmpxchg() in lvm_get_task_state(). */
 	lvm = smp_load_acquire(&llt->lvm);
 	if (lvm && READ_ONCE(lvm->L) && lvm->dirty) {
-		lua_modules_free(task, lvm->L);
+		int idx = srcu_read_lock(&modules_ss);
+
+		lvm_put_loaded_modules(task, lvm->L);
 		lvm_vm_reset(lvm);
+		srcu_read_unlock(&modules_ss, idx);
 		lvm->dirty = false;
 	}
 
