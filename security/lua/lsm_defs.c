@@ -1735,7 +1735,7 @@ LUA_LSM_INT_DEFINE1(file_truncate, struct file *, file)
  */
 LUA_LSM_PREPARE_DEFINE2(task_alloc, struct task_struct *, task, u64, clone_flags)
 {
-	return task_blob_init(task);
+	return 0;
 }
 
 /**
@@ -1753,7 +1753,7 @@ LUA_LSM_INT_DEFINE2(task_alloc, struct task_struct *, task, u64, clone_flags)
  */
 LUA_LSM_POSTPONE_DEFINE1(task_free, struct task_struct *, task)
 {
-	task_blob_free(task);
+	lua_lsm_task_blob_free(task);
 }
 
 /**

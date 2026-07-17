@@ -49,12 +49,20 @@
 		return (ctype *)checkudata(L, idx, metaname);					\
 	}
 
-#define LUA_OBJECT_KVCACHE_FUNC(name, ctype, blob, method, fname)				\
+#define LUA_OBJECT_KVCACHE_FUNC_object(name, ctype, method, fname, ...)			\
 	static int rawmeth_ ## name ## _ ## method(lua_State *L)				\
 	{											\
 		ctype p = toraw ## name(L, 1);							\
-		struct lua_lsm_ ## blob *ll = lua_lsm_ ## name(p);				\
-		return lua_object_ ## fname(L, ll ? &ll->dict : NULL);				\
+		struct lua_lsm_object *ll = lua_lsm_ ## name(p);				\
+		struct kvcache_dict *dict = ll ? &ll->dict : NULL;				\
+		return lua_object_ ## fname(L, dict);						\
+	}
+
+#define LUA_OBJECT_KVCACHE_FUNC_task(name, ctype, method, fname, create)			\
+	static int rawmeth_ ## name ## _ ## method(lua_State *L)				\
+	{											\
+		ctype p = toraw ## name(L, 1);							\
+		return lua_object_ ## fname(L, lua_lsm_task_dict(p, create));			\
 	}
 
 #define LUA_OBJECT_FUNCS_DEFINE(name, ctype, has_kvcache)					\
@@ -75,10 +83,10 @@
 	LUA_OBJECT_META_DEFINE(name, ctype, d, METHOD_NAME(name))				\
 	LUA_OBJECT_META_DEFINE(raw ## name, ctype, d, METHOD_NAME_RAW(name))			\
 	LUA_OBJECT_META_DEFINE(gc ## name, ctype, d, METHOD_NAME_GC(name))			\
-	LUA_OBJECT_KVCACHE_FUNC(name, ctype, blob, kvcache_get, get)				\
-	LUA_OBJECT_KVCACHE_FUNC(name, ctype, blob, kvcache_incr, incr)				\
-	LUA_OBJECT_KVCACHE_FUNC(name, ctype, blob, index, index)				\
-	LUA_OBJECT_KVCACHE_FUNC(name, ctype, blob, newindex, newindex)				\
+	LUA_OBJECT_KVCACHE_FUNC_ ## blob(name, ctype, kvcache_get, get, false)			\
+	LUA_OBJECT_KVCACHE_FUNC_ ## blob(name, ctype, kvcache_incr, incr, true)			\
+	LUA_OBJECT_KVCACHE_FUNC_ ## blob(name, ctype, index, index, false)			\
+	LUA_OBJECT_KVCACHE_FUNC_ ## blob(name, ctype, newindex, newindex, true)			\
 	LUA_OBJECT_FUNCS_DEFINE(name, ctype, 1)							\
 	static inline void create_ ## name ## _meta(lua_State *L,				\
 				const luaL_Reg *funcs, const luaL_Reg *gc)			\

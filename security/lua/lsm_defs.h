@@ -251,10 +251,10 @@ static inline bool lua_lsm_hook_has_inactive_cleanup(unsigned int nr)
 		if (!lua_lsm_hook_active(__LL_NR_ ## NAME))				\
 			goto out;							\
 		L = lvm_get();								\
-		if (!L) {								\
-			if (lvm_current_task_teardown())				\
+		if (IS_ERR(L)) {							\
+			if (PTR_ERR(L) == -ESRCH)					\
 				goto out;						\
-			return -ENOMEM;							\
+			return PTR_ERR(L);						\
 		}									\
 		lua_pushcfunction(L, lua_traceback);					\
 		lua_pushthread(L);							\

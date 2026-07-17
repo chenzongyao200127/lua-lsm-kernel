@@ -8,6 +8,7 @@
 #ifndef _SECURITY_LUA_LSM_LSM_H
 #define _SECURITY_LUA_LSM_LSM_H
 
+#include <linux/err.h>
 #include <linux/list.h>
 #include <linux/sched.h>
 #include <linux/fs.h>
@@ -114,7 +115,6 @@ extern struct srcu_struct modules_ss;
 
 lua_State *lvm_get(void);
 void lvm_put(lua_State *L);
-bool lvm_current_task_teardown(void);
 
 int lua_lsm_module_register(const char *code, size_t len);
 int lua_lsm_module_unregister(const char *name);
@@ -143,14 +143,24 @@ struct lvm_state {
 
 struct lua_lsm_task {
 	struct lvm_state *lvm;
-	bool lvm_teardown;
-	struct kvcache_dict dict;
+	struct kvcache_dict *dict;
 };
 
 static inline struct lua_lsm_task *lua_lsm_task(const struct task_struct *task)
 {
 	return task->security + lua_lsm_blob_sizes.lbs_task;
 }
+
+static inline bool lua_lsm_task_blob_has_state(const struct task_struct *task)
+{
+	struct lua_lsm_task *llt = lua_lsm_task(task);
+
+	return READ_ONCE(llt->lvm) || READ_ONCE(llt->dict);
+}
+
+struct kvcache_dict *lua_lsm_task_dict(const struct task_struct *task,
+				       bool create);
+void lua_lsm_task_blob_free(struct task_struct *task);
 
 /* common object */
 
@@ -236,9 +246,6 @@ static inline struct lua_lsm_object *lua_lsm_bdev(const struct block_device *bde
 {
 	return bdev->bd_security + lua_lsm_blob_sizes.lbs_bdev;
 }
-
-int task_blob_init(struct task_struct *task);
-void task_blob_free(struct task_struct *task);
 
 /* lua C module */
 
