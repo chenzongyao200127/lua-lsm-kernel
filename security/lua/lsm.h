@@ -9,27 +9,30 @@
 #define _SECURITY_LUA_LSM_LSM_H
 
 #include <linux/err.h>
-#include <linux/list.h>
-#include <linux/sched.h>
 #include <linux/fs.h>
-#include <linux/msg.h>
-#include <net/sock.h>
-#include <linux/lsm_hooks.h>
-#include <linux/spinlock.h>
-#include <linux/perf_event.h>
-#include <linux/u64_stats_sync.h>
 #include <linux/jump_label.h>
+#include <linux/list.h>
+#include <linux/lsm_hooks.h>
 #include <linux/lua.h>
+#include <linux/msg.h>
+#include <linux/perf_event.h>
+#include <linux/sched.h>
+#include <linux/spinlock.h>
+#include <linux/u64_stats_sync.h>
+#include <net/sock.h>
+
 #include "bitmap.h"
 #include "kvcache.h"
+
+#define LUA_LSM_VERSION		1
+
+/* LSM hook dispatch */
 
 DECLARE_STATIC_KEY_FALSE(lua_lsm_modules_active);
 DECLARE_STATIC_KEY_FALSE(lua_lsm_inactive_cleanup_armed);
 
 /* Flag indicating whether initialization completed */
 extern int lua_lsm_initialized __initdata;
-
-#define LUA_LSM_VERSION		1
 
 struct lua_lsm_hook_stat {
 	const char *name;
@@ -67,17 +70,19 @@ static inline bool lua_lsm_hook_supported(unsigned int nr)
 	}
 }
 
-struct lua_lsm_module_shdict {
-	struct list_head list;
-	struct kvcache_dict dict;
-	char name[];
-};
+/* Policy modules */
 
 enum lua_lsm_module_state {
 	LMS_STATE_LIVE,
 	LMS_STATE_COMING,
 	LMS_STATE_GOING,
 	LMS_STATE_ZOMBIE,
+};
+
+struct lua_lsm_module_shdict {
+	struct list_head list;
+	struct kvcache_dict dict;
+	char name[];
 };
 
 struct lua_lsm_module {
@@ -109,25 +114,10 @@ struct lua_lsm_module {
 extern struct list_head lsm_modules;
 extern struct srcu_struct modules_ss;
 
-#define TABLINE							\
-	"---------------------------------------------"		\
-	"---------------------------------------------"
-
-lua_State *lvm_get(void);
-void lvm_put(lua_State *L);
-
 int lua_lsm_module_register(const char *code, size_t len);
 int lua_lsm_module_unregister(const char *name);
 
-int modules_show(struct seq_file *m, void *v);
-
-#ifdef CONFIG_SECURITY_LUA_LSM_STATS
-void lua_lsm_hook_stats_record(unsigned int nr, u64 delta);
-void lvm_stats_show(struct seq_file *m);
-int lsm_funcs_show(struct seq_file *m, void *v);
-#endif
-
-extern struct lsm_blob_sizes lua_lsm_blob_sizes;
+/* Lua VMs */
 
 struct lvm_state {
 	lua_State *L;
@@ -141,8 +131,19 @@ struct lvm_state {
 #endif
 };
 
+lua_State *lvm_get(void);
+void lvm_put(lua_State *L);
+
+/* LSM blobs */
+
+extern struct lsm_blob_sizes lua_lsm_blob_sizes;
+
 struct lua_lsm_task {
 	struct lvm_state *lvm;
+	struct kvcache_dict *dict;
+};
+
+struct lua_lsm_object {
 	struct kvcache_dict *dict;
 };
 
@@ -161,16 +162,6 @@ static inline bool lua_lsm_task_blob_has_state(const struct task_struct *task)
 struct kvcache_dict *lua_lsm_task_dict(const struct task_struct *task,
 				       bool create);
 void lua_lsm_task_blob_free(struct task_struct *task);
-
-/* common object */
-
-struct lua_lsm_object {
-	struct kvcache_dict *dict;
-};
-
-struct kvcache_dict *lua_lsm_object_dict(struct lua_lsm_object *llo,
-					 bool create);
-void lua_lsm_object_dict_free(struct lua_lsm_object *llo);
 
 static inline struct lua_lsm_object *lua_lsm_cred(const struct cred *cred)
 {
@@ -251,7 +242,25 @@ static inline struct lua_lsm_object *lua_lsm_bdev(const struct block_device *bde
 	return bdev->bd_security + lua_lsm_blob_sizes.lbs_bdev;
 }
 
-/* lua C module */
+struct kvcache_dict *lua_lsm_object_dict(struct lua_lsm_object *llo,
+					 bool create);
+void lua_lsm_object_dict_free(struct lua_lsm_object *llo);
+
+/* Observability */
+
+#define TABLINE							\
+	"---------------------------------------------"		\
+	"---------------------------------------------"
+
+int modules_show(struct seq_file *m, void *v);
+
+#ifdef CONFIG_SECURITY_LUA_LSM_STATS
+void lua_lsm_hook_stats_record(unsigned int nr, u64 delta);
+void lvm_stats_show(struct seq_file *m);
+int lsm_funcs_show(struct seq_file *m, void *v);
+#endif
+
+/* Lua C modules */
 
 int luaopen_kernel(lua_State *L);
 int luaopen_fs(lua_State *L);
@@ -260,7 +269,8 @@ int luaopen_errno(lua_State *L);
 int luaopen_capability(lua_State *L);
 int luaopen_signal(lua_State *L);
 
-/* securityfs interface */
+/* Securityfs interface */
+
 int lua_lsm_securityfs_init(void);
 
 #endif  /* ! _SECURITY_LUA_LSM_LSM_H */
