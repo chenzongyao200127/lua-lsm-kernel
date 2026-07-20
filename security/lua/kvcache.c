@@ -585,8 +585,10 @@ int lua_object_get(lua_State *L, struct kvcache_dict *dict)
 {
 	struct lua_lsm_module *module;
 
-	if (!dict)
-		return 0;
+	if (!dict) {
+		lua_pushnil(L);
+		return 1;
+	}
 
 	module = module_from_object_fenv(L, 1);
 	if (!module)
