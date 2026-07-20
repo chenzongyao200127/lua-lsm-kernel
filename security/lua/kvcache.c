@@ -62,7 +62,7 @@ static int kvcache_node_cmp(struct kvcache_node *n1, struct kvcache_node *n2)
 
 RB_GENERATE_STATIC(kvcache, kvcache_node, node, kvcache_node_cmp);
 
-static void __kvcache_dict_init(struct kvcache_dict *dict)
+static void kvcache_dict_init(struct kvcache_dict *dict)
 {
 	rwlock_init(&dict->lock);
 	RB_INIT(&dict->root);
@@ -111,7 +111,7 @@ static int kvcache_dict_init_once(struct kvcache_dict *dict)
 		 */
 		if (atomic_try_cmpxchg(&dict->state, &state,
 				       KVCACHE_DICT_INITING)) {
-			__kvcache_dict_init(dict);
+			kvcache_dict_init(dict);
 			atomic_set_release(&dict->state, KVCACHE_DICT_READY);
 			goto out_bh;
 		}
@@ -549,13 +549,6 @@ void kvcache_dict_free(struct kvcache_dict *dict)
 	WARN_ON(atomic_read(&dict->count) != 0);
 }
 
-void kvcache_dict_init(struct kvcache_dict *dict)
-{
-	atomic_set(&dict->state, KVCACHE_DICT_INITING);
-	__kvcache_dict_init(dict);
-	atomic_set_release(&dict->state, KVCACHE_DICT_READY);
-}
-
 /******************************** object cache *******************************/
 
 const int _module_sentinel;
@@ -714,6 +707,11 @@ static int shdict_tostring(lua_State *L)
 {
 	struct kvcache_dict *shdict = toshdict(L, 1);
 	unsigned long flags;
+
+	if (!kvcache_dict_ready(shdict)) {
+		lua_pushfstring(L, "shdict (%d / %d)", 0, CACHE_CAPACITY);
+		return 1;
+	}
 
 	read_lock_irqsave(&shdict->lock, flags);
 	lua_pushfstring(L, "shdict (%d / %d)",

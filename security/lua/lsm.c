@@ -583,13 +583,12 @@ static int lua_shared_index(lua_State *L)
 		unsigned long flags;
 		size_t l = strlen(name);
 
-		shdict = kmalloc(struct_size(shdict, name, l + 1),
+		shdict = kzalloc(struct_size(shdict, name, l + 1),
 				 lua_lsm_gfp());
 		if (!shdict) {
 			__log_err("No memory\n");
 			return 0;
 		}
-		kvcache_dict_init(&shdict->dict);
 		memcpy(shdict->name, name, l);
 		shdict->name[l] = '\0';
 

@@ -58,7 +58,6 @@ void kvcache_stats_show(struct seq_file *m);
 
 int kvcache_module_nodes_gc(struct lua_lsm_module *module);
 void kvcache_dict_free(struct kvcache_dict *dict);
-void kvcache_dict_init(struct kvcache_dict *dict);
 
 /******************************** object cache *******************************/
 
