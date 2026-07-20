@@ -374,12 +374,7 @@ LUA_LSM_VOID_DEFINE1(sb_delete, struct super_block *, sb)
  */
 LUA_LSM_POSTPONE_DEFINE1(sb_free_security, struct super_block *, sb)
 {
-	struct lua_lsm_object *llo = lua_lsm_superblock(sb);
-
-	if (!llo)
-		return;
-
-	kvcache_dict_free(&llo->dict);
+	lua_lsm_object_dict_free(lua_lsm_superblock(sb));
 }
 
 /**
@@ -747,8 +742,7 @@ LUA_LSM_VOID_DEFINE1(inode_free_security, struct inode *, inode)
  */
 LUA_LSM_POSTPONE_DEFINE1(inode_free_security_rcu, void *, inode_security)
 {
-	struct lua_lsm_object *llo = lua_lsm_inode_rcu(inode_security);
-	kvcache_dict_free(&llo->dict);
+	lua_lsm_object_dict_free(lua_lsm_inode_rcu(inode_security));
 }
 
 /**
@@ -1544,12 +1538,7 @@ LUA_LSM_VOID_DEFINE1(file_release, struct file *, file)
  */
 LUA_LSM_POSTPONE_DEFINE1(file_free_security, struct file *, file)
 {
-	struct lua_lsm_object *llo = lua_lsm_file(file);
-
-	if (!llo)
-		return;
-
-	kvcache_dict_free(&llo->dict);
+	lua_lsm_object_dict_free(lua_lsm_file(file));
 }
 
 /**
@@ -1770,12 +1759,7 @@ LUA_LSM_INT_DEFINE2(cred_alloc_blank, struct cred *, cred, gfp_t, gfp)
  */
 LUA_LSM_POSTPONE_DEFINE1(cred_free, struct cred *, cred)
 {
-	struct lua_lsm_object *llo = lua_lsm_cred(cred);
-
-	if (!llo)
-		return;
-
-	kvcache_dict_free(&llo->dict);
+	lua_lsm_object_dict_free(lua_lsm_cred(cred));
 }
 
 /**
@@ -2192,12 +2176,7 @@ LUA_LSM_INT_DEFINE1(msg_msg_alloc_security, struct msg_msg *, msg)
  */
 LUA_LSM_POSTPONE_DEFINE1(msg_msg_free_security, struct msg_msg *, msg)
 {
-	struct lua_lsm_object *llo = lua_lsm_msgmsg(msg);
-
-	if (!llo)
-		return;
-
-	kvcache_dict_free(&llo->dict);
+	lua_lsm_object_dict_free(lua_lsm_msgmsg(msg));
 }
 
 /**
@@ -2231,12 +2210,7 @@ LUA_LSM_INT_DEFINE1(msg_queue_alloc_security, struct kern_ipc_perm *, perm)
  */
 LUA_LSM_POSTPONE_DEFINE1(msg_queue_free_security, struct kern_ipc_perm *, perm)
 {
-	struct lua_lsm_object *llo = lua_lsm_ipc(perm);
-
-	if (!llo)
-		return;
-
-	kvcache_dict_free(&llo->dict);
+	lua_lsm_object_dict_free(lua_lsm_ipc(perm));
 }
 
 /**
@@ -2318,12 +2292,7 @@ LUA_LSM_INT_DEFINE1(shm_alloc_security, struct kern_ipc_perm *, perm)
  */
 LUA_LSM_POSTPONE_DEFINE1(shm_free_security, struct kern_ipc_perm *, perm)
 {
-	struct lua_lsm_object *llo = lua_lsm_ipc(perm);
-
-	if (!llo)
-		return;
-
-	kvcache_dict_free(&llo->dict);
+	lua_lsm_object_dict_free(lua_lsm_ipc(perm));
 }
 
 /**
@@ -2389,12 +2358,7 @@ LUA_LSM_INT_DEFINE1(sem_alloc_security, struct kern_ipc_perm *, perm)
  */
 LUA_LSM_POSTPONE_DEFINE1(sem_free_security, struct kern_ipc_perm *, perm)
 {
-	struct lua_lsm_object *llo = lua_lsm_ipc(perm);
-
-	if (!llo)
-		return;
-
-	kvcache_dict_free(&llo->dict);
+	lua_lsm_object_dict_free(lua_lsm_ipc(perm));
 }
 
 /**
@@ -2890,8 +2854,7 @@ LUA_LSM_INT_DEFINE3(sk_alloc_security, struct sock *, sk,
  */
 LUA_LSM_POSTPONE_DEFINE1(sk_free_security, struct sock *, sk)
 {
-	struct lua_lsm_object *llo = lua_lsm_sock(sk);
-	kvcache_dict_free(&llo->dict);
+	lua_lsm_object_dict_free(lua_lsm_sock(sk));
 }
 
 /**
@@ -3613,8 +3576,7 @@ LUA_LSM_INT_DEFINE1(bdev_alloc_security, struct block_device *, bdev)
  */
 LUA_LSM_POSTPONE_DEFINE1(bdev_free_security, struct block_device *, bdev)
 {
-	struct lua_lsm_object *llo = lua_lsm_bdev(bdev);
-	kvcache_dict_free(&llo->dict);
+	lua_lsm_object_dict_free(lua_lsm_bdev(bdev));
 }
 
 /**

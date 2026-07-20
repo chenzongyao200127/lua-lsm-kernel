@@ -598,6 +598,9 @@ int lua_object_incr(lua_State *L, struct kvcache_dict *dict)
 {
 	struct lua_lsm_module *module;
 
+	if (IS_ERR(dict))
+		return kvcache_result(L, PTR_ERR(dict));
+
 	if (!dict)
 		return kvcache_result(L, -ESRCH);
 
@@ -652,6 +655,9 @@ int lua_object_index(lua_State *L, struct kvcache_dict *dict)
 int lua_object_newindex(lua_State *L, struct kvcache_dict *dict)
 {
 	struct lua_lsm_module *module;
+
+	if (IS_ERR(dict))
+		return kvcache_result(L, PTR_ERR(dict));
 
 	if (!dict)
 		return kvcache_result(L, -ESRCH);

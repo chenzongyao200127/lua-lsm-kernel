@@ -1436,7 +1436,7 @@ struct kvcache_dict *lua_lsm_task_dict(const struct task_struct *task,
 
 	dict = kzalloc(sizeof(*dict), lua_lsm_gfp());
 	if (!dict)
-		return NULL;
+		return ERR_PTR(-ENOMEM);
 
 	if (IS_ERR(READ_ONCE(llt->lvm))) {
 		kfree(dict);
@@ -1492,6 +1492,47 @@ void lua_lsm_task_blob_free(struct task_struct *task)
 	}
 
 	dict = xchg(&llt->dict, NULL);
+	if (dict) {
+		kvcache_dict_free(dict);
+		kfree(dict);
+	}
+}
+
+/******************************* object blob ********************************/
+
+struct kvcache_dict *lua_lsm_object_dict(struct lua_lsm_object *llo, bool create)
+{
+	struct kvcache_dict *dict, *old;
+
+	if (!llo)
+		return NULL;
+
+	/* Pairs with cmpxchg() publishing a lazily allocated dictionary. */
+	dict = smp_load_acquire(&llo->dict);
+	if (likely(dict || !create))
+		return dict;
+
+	dict = kzalloc(sizeof(*dict), lua_lsm_gfp());
+	if (!dict)
+		return ERR_PTR(-ENOMEM);
+
+	old = cmpxchg(&llo->dict, NULL, dict);
+	if (old) {
+		kfree(dict);
+		dict = old;
+	}
+
+	return dict;
+}
+
+void lua_lsm_object_dict_free(struct lua_lsm_object *llo)
+{
+	struct kvcache_dict *dict;
+
+	if (!llo)
+		return;
+
+	dict = xchg(&llo->dict, NULL);
 	if (dict) {
 		kvcache_dict_free(dict);
 		kfree(dict);

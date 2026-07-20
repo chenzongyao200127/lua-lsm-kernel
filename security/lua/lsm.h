@@ -165,8 +165,12 @@ void lua_lsm_task_blob_free(struct task_struct *task);
 /* common object */
 
 struct lua_lsm_object {
-	struct kvcache_dict dict;
+	struct kvcache_dict *dict;
 };
+
+struct kvcache_dict *lua_lsm_object_dict(struct lua_lsm_object *llo,
+					 bool create);
+void lua_lsm_object_dict_free(struct lua_lsm_object *llo);
 
 static inline struct lua_lsm_object *lua_lsm_cred(const struct cred *cred)
 {

@@ -49,13 +49,12 @@
 		return (ctype *)checkudata(L, idx, metaname);					\
 	}
 
-#define LUA_OBJECT_KVCACHE_FUNC_object(name, ctype, method, fname, ...)			\
+#define LUA_OBJECT_KVCACHE_FUNC_object(name, ctype, method, fname, create)			\
 	static int rawmeth_ ## name ## _ ## method(lua_State *L)				\
 	{											\
 		ctype p = toraw ## name(L, 1);							\
 		struct lua_lsm_object *ll = lua_lsm_ ## name(p);				\
-		struct kvcache_dict *dict = ll ? &ll->dict : NULL;				\
-		return lua_object_ ## fname(L, dict);						\
+		return lua_object_ ## fname(L, lua_lsm_object_dict(ll, create));		\
 	}
 
 #define LUA_OBJECT_KVCACHE_FUNC_task(name, ctype, method, fname, create)			\
