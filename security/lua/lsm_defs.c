@@ -348,12 +348,9 @@ LUA_LSM_INT_DEFINE2(fs_context_parse_param, struct fs_context *, fc,
  */
 LUA_LSM_PREPARE_DEFINE1(sb_alloc_security, struct super_block *, sb)
 {
-	struct lua_lsm_object *llo = lua_lsm_superblock(sb);
-
-	if (!llo)
+	if (!lua_lsm_superblock(sb))
 		return -EINVAL;
 
-	kvcache_dict_init(&llo->dict);
 	return 0;
 }
 
@@ -727,12 +724,9 @@ LUA_LSM_INT_DEFINE3(path_notify, const struct path *, path,
  */
 LUA_LSM_PREPARE_DEFINE1(inode_alloc_security, struct inode *, inode)
 {
-	struct lua_lsm_object *llo = lua_lsm_inode(inode);
-
-	if (!llo)
+	if (!lua_lsm_inode(inode))
 		return -EINVAL;
 
-	kvcache_dict_init(&llo->dict);
 	return 0;
 }
 
@@ -1530,12 +1524,9 @@ LUA_LSM_INT_DEFINE2(file_permission, struct file *, file, int, mask)
  */
 LUA_LSM_PREPARE_DEFINE1(file_alloc_security, struct file *, file)
 {
-	struct lua_lsm_object *llo = lua_lsm_file(file);
-
-	if (!llo)
+	if (!lua_lsm_file(file))
 		return -EINVAL;
 
-	kvcache_dict_init(&llo->dict);
 	return 0;
 }
 
@@ -1770,12 +1761,9 @@ LUA_LSM_VOID_DEFINE1(task_free, struct task_struct *, task)
  */
 LUA_LSM_PREPARE_DEFINE2(cred_alloc_blank, struct cred *, cred, gfp_t, gfp)
 {
-	struct lua_lsm_object *llo = lua_lsm_cred(cred);
-
-	if (!llo)
+	if (!lua_lsm_cred(cred))
 		return -EINVAL;
 
-	kvcache_dict_init(&llo->dict);
 	return 0;
 }
 
@@ -1817,12 +1805,9 @@ LUA_LSM_VOID_DEFINE1(cred_free, struct cred *, cred)
 LUA_LSM_PREPARE_DEFINE3(cred_prepare, struct cred *, new,
 		const struct cred *, old, gfp_t, gfp)
 {
-	struct lua_lsm_object *llo = lua_lsm_cred(new);
-
-	if (!llo)
+	if (!lua_lsm_cred(new))
 		return -EINVAL;
 
-	kvcache_dict_init(&llo->dict);
 	return 0;
 }
 
@@ -2205,12 +2190,9 @@ LUA_LSM_VOID_DEFINE2(ipc_getlsmprop, struct kern_ipc_perm *, ipcp,
  */
 LUA_LSM_PREPARE_DEFINE1(msg_msg_alloc_security, struct msg_msg *, msg)
 {
-	struct lua_lsm_object *llo = lua_lsm_msgmsg(msg);
-
-	if (!llo)
+	if (!lua_lsm_msgmsg(msg))
 		return -EINVAL;
 
-	kvcache_dict_init(&llo->dict);
 	return 0;
 }
 
@@ -2250,12 +2232,9 @@ LUA_LSM_VOID_DEFINE1(msg_msg_free_security, struct msg_msg *, msg)
  */
 LUA_LSM_PREPARE_DEFINE1(msg_queue_alloc_security, struct kern_ipc_perm *, perm)
 {
-	struct lua_lsm_object *llo = lua_lsm_ipc(perm);
-
-	if (!llo)
+	if (!lua_lsm_ipc(perm))
 		return -EINVAL;
 
-	kvcache_dict_init(&llo->dict);
 	return 0;
 }
 
@@ -2343,12 +2322,9 @@ LUA_LSM_INT_DEFINE5(msg_queue_msgrcv, struct kern_ipc_perm *, perm,
  */
 LUA_LSM_PREPARE_DEFINE1(shm_alloc_security, struct kern_ipc_perm *, perm)
 {
-	struct lua_lsm_object *llo = lua_lsm_ipc(perm);
-
-	if (!llo)
+	if (!lua_lsm_ipc(perm))
 		return -EINVAL;
 
-	kvcache_dict_init(&llo->dict);
 	return 0;
 }
 
@@ -2420,12 +2396,9 @@ LUA_LSM_INT_DEFINE3(shm_shmat, struct kern_ipc_perm *, perm,
  */
 LUA_LSM_PREPARE_DEFINE1(sem_alloc_security, struct kern_ipc_perm *, perm)
 {
-	struct lua_lsm_object *llo = lua_lsm_ipc(perm);
-
-	if (!llo)
+	if (!lua_lsm_ipc(perm))
 		return -EINVAL;
 
-	kvcache_dict_init(&llo->dict);
 	return 0;
 }
 
@@ -2924,8 +2897,6 @@ LUA_LSM_INT_DEFINE3(socket_getpeersec_dgram, struct socket *, sock,
 LUA_LSM_PREPARE_DEFINE3(sk_alloc_security, struct sock *, sk,
 		int, family, gfp_t, priority)
 {
-	struct lua_lsm_object *llo = lua_lsm_sock(sk);
-	kvcache_dict_init(&llo->dict);
 	return 0;
 }
 
