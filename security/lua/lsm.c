@@ -1501,8 +1501,15 @@ int lua_lsm_module_unregister(const char *name)
 	if (lua_lsm_module_ready_to_finalize(module))
 		goto out_detach;
 
+	/*
+	 * The module is deactivated -- its hooks no longer run -- but some Lua
+	 * VMs still hold a reference to it. Report success: the remaining VMs
+	 * drop it lazily on their next Lua-LSM entry, and the finalize worker
+	 * frees it once loaded_vm_count reaches zero. Until then the module
+	 * stays on the list and is visible as ZOMBIE in /modules.
+	 */
 	remaining = atomic_read(&module->loaded_vm_count);
-	err = -EBUSY;
+	err = 0;
 	goto out_unlock;
 
 out_detach:
@@ -1512,10 +1519,28 @@ out_detach:
 out_unlock:
 	mutex_unlock(&modules_mutex);
 
-	pr_info("Unregister module <%s>: dropped from %d Lua VMs, remaining = %d, vm_nusage = %d\n",
-		name, count, remaining, atomic_read(&vm_nusage));
+	pr_info("Unregister module <%s>: dropped from %d Lua VMs, remaining = %d%s, vm_nusage = %d\n",
+		name, count, remaining,
+		remaining ? " (zombie, background cleanup pending)" : "",
+		atomic_read(&vm_nusage));
 
 	return err;
+}
+
+static const char *lua_lsm_module_state_name(enum lua_lsm_module_state state)
+{
+	switch (state) {
+	case LMS_STATE_LIVE:
+		return "live";
+	case LMS_STATE_COMING:
+		return "coming";
+	case LMS_STATE_GOING:
+		return "going";
+	case LMS_STATE_ZOMBIE:
+		return "zombie";
+	default:
+		return "?";
+	}
 }
 
 int modules_show(struct seq_file *m, void *v)
@@ -1524,18 +1549,20 @@ int modules_show(struct seq_file *m, void *v)
 	int idx;
 
 	seq_printf(m, "modules for lua-lsm\n");
-	seq_printf(m, "%-20s %-10s %6s %4s %5s %6s %6s %-34s\n",
+	seq_printf(m, "%-20s %-10s %6s %4s %5s %6s %6s %-7s %-34s\n",
 		   "name", "license", "size", "nlsm",
-		   "nload", "shdict", "kvnode", "author");
+		   "nload", "shdict", "kvnode", "state", "author");
 	seq_printf(m, "%s\n", TABLINE);
 
 	idx = srcu_read_lock(&modules_ss);
 	list_for_each_entry_srcu(module, &lsm_modules, list, srcu_read_lock_held(&modules_ss)) {
-		seq_printf(m, "%-20s %-10s %6zu %4d %5d %6d %6d %-34s\n",
+		seq_printf(m, "%-20s %-10s %6zu %4d %5d %6d %6d %-7s %-34s\n",
 			   module->name, module->license, module->chunk_len,
 			   module->nhooks, atomic_read(&module->loaded_vm_count),
 			   atomic_read(&module->shdict_count),
-			   atomic_read(&module->kvnodes_count), module->author);
+			   atomic_read(&module->kvnodes_count),
+			   lua_lsm_module_state_name(READ_ONCE(module->state)),
+			   module->author);
 	}
 	srcu_read_unlock(&modules_ss, idx);
 	return 0;
