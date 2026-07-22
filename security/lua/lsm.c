@@ -536,7 +536,7 @@ static int lvm_drop_module(lua_State *L, struct lua_lsm_module *module)
 
 	err = lvm_forget_module(L, module);
 	if (!err) {
-		int loaded_vms = lua_lsm_module_drop_from_vm(module);
+		int __maybe_unused loaded_vms = lua_lsm_module_drop_from_vm(module);
 
 		__log_info("<%s>: %d-%d dropped module <%s>, loaded_vms = %d\n",
 			   current->comm, task_tgid_nr(current),
@@ -903,7 +903,7 @@ static void lvm_put_loaded_modules(struct task_struct *task, lua_State *L)
 		lua_pushstring(L, module->name);
 		lua_rawget(L, -2);
 		if (lua_istable(L, -1)) {
-			int loaded_vms = lua_lsm_module_drop_from_vm(module);
+			int __maybe_unused loaded_vms = lua_lsm_module_drop_from_vm(module);
 
 			if (task)
 				__log_info("<%s>: %d-%d dropped module <%s>, loaded_vms = %d\n",
