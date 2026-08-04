@@ -96,4 +96,22 @@ Inode (`inode`):
 Dentry (`dentry`):
 - `dentry:path()` -> path string
 
-For a full list, see the method tables in `lua_kernel.c` and `lua_fs.c`.
+Sock (`sock`):
+- `sock:suites()` -> family, type, protocol strings
+- `sock:proto()` -> raw `sk_protocol` number, needed for non-IP protocol
+  namespaces such as netlink's `NETLINK_GENERIC`
+
+Skb (`skb`):
+- `skb:len()` -> payload length
+- `skb:read(off, len)` -> `len` bytes as a string (`len` <= 256), or `nil` when
+  out of range
+
+`skb:read()` returns raw bytes; decode multi-byte fields in Lua (e.g. with
+`string.byte`), since the in-kernel Lua has no bit library. Reads are
+bounds-checked and return `nil` instead of raising, so the policy decides the
+verdict. Note that a Lua error inside a hook falls back to that hook's default
+return value, which is "allow" for most hooks; wrap parsing in `pcall()` when
+the policy must fail closed.
+
+For a full list, see the method tables in `lua_kernel.c`, `lua_fs.c`, and
+`lua_net.c`.
