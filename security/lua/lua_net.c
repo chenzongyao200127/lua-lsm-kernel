@@ -324,8 +324,8 @@ static int net_skb_secmark(lua_State *L)
 	return 1;
 }
 
-static int skb_read_bounded(struct sk_buff *skb, lua_Integer offset,
-			    void *dst, unsigned int size)
+static int net_skb_read_bounded(struct sk_buff *skb, lua_Integer offset,
+				void *dst, unsigned int size)
 {
 	if (offset < 0 || offset > (lua_Integer)skb->len)
 		return -EINVAL;
@@ -352,7 +352,7 @@ static int net_skb_read(lua_State *L)
 	char buffer[SKB_READ_MAX];
 
 	if (length < 0 || length > SKB_READ_MAX ||
-	    skb_read_bounded(skb, offset, buffer, (unsigned int)length))
+	    net_skb_read_bounded(skb, offset, buffer, (unsigned int)length))
 		lua_pushnil(L);
 	else
 		lua_pushlstring(L, buffer, (size_t)length);
