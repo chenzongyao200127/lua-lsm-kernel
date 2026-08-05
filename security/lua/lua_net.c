@@ -269,16 +269,11 @@ static const luaL_Reg socket_meth[] = {
 
 /********************************** sk_buff *********************************/
 
+/*
+ * A request or time-wait sk lacks the fields the sock accessors read, and the
+ * garbage passes for a valid protocol number, so the policy fails open.
+ */
 static int net_skb_sock(lua_State *L)
-{
-	struct sk_buff *skb = toskb(L, 1);
-	struct sock *sk = skb->sk;
-
-	sk ? *newsock(L) = sk : lua_pushnil(L);
-	return 1;
-}
-
-static int net_skb_full_sk(lua_State *L)
 {
 	struct sk_buff *skb = toskb(L, 1);
 	struct sock *sk = skb_to_full_sk(skb);
@@ -366,7 +361,6 @@ static int net_skb_read(lua_State *L)
 
 static const luaL_Reg skb_meth[] = {
 	{ "sock",	net_skb_sock		},
-	{ "full_sk",	net_skb_full_sk		},
 	{ "protocol",	net_skb_protocol	},
 	{ "iif",	net_skb_iif		},
 	{ "secmark",	net_skb_secmark		},
