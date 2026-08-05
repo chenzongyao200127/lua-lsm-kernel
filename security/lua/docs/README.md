@@ -62,7 +62,7 @@ local M = {
   version = 1,
 }
 
-function M.file_open(file, cred)
+function M.file_open(file)
   local path = file:path()
   if path and path:match("^/etc/shadow$") then
     return false, errno.EPERM
@@ -76,5 +76,9 @@ return M
 ## Docs
 
 - `USAGE.md` - build/enable and runtime management
-- `API.md` - module format, hook returns, and core APIs
+- `API.md` - module format, execution model, hook contract, per-object storage,
+  and worked patterns
+- `OBJECTS.md` - reference for every object type (`task`, `file`, `sock`, ...)
+- `LIBRARIES.md` - reference for the built-in libraries
+- `HOOKS.md` - every hook with its Lua arguments, return convention, and default
 - `OBSERVABILITY.md` - stats, debug logs, and troubleshooting data
