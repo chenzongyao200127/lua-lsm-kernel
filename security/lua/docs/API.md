@@ -102,6 +102,10 @@ Sock (`sock`):
   namespaces such as netlink's `NETLINK_GENERIC`
 
 Skb (`skb`):
+- `skb:sock()` -> owning sock, or `nil`. Always a full sock: a half-open
+  (`SYN_RECV`) connection resolves to its listening sock and a time-wait sock
+  yields `nil`, because those mini-sock forms lack the fields the `sock`
+  accessors read
 - `skb:len()` -> payload length
 - `skb:read(off, len)` -> `len` bytes as a string (`len` <= 256), or `nil` when
   out of range
