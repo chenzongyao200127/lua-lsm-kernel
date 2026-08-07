@@ -318,14 +318,10 @@ out:											\
 		ret = __prepare_ ## NAME(__MAP(x, __SC_ARGS, __VA_ARGS__));		\
 		if (ret >= 0) {								\
 			int idx = srcu_read_lock(&modules_ss);				\
-			if (static_branch_unlikely(&lua_lsm_modules_active)) {		\
-				int err = __lua_lsm_ ## NAME(CALL_RETP_ARGS_ ## x	\
+			int err = __lua_lsm_ ## NAME(CALL_RETP_ARGS_ ## x		\
 					__MAP(x, __SC_ARGS, __VA_ARGS__));		\
-				if (err)						\
-					ret = LUA_LSM_DISPATCH_FAILRET_ ## failret(NAME);\
-			} else {							\
-				ret = LSM_RET_DEFAULT(NAME);				\
-			}								\
+			if (err)							\
+				ret = LUA_LSM_DISPATCH_FAILRET_ ## failret(NAME);	\
 			__postpone_ ## NAME(__MAP(x, __SC_ARGS, __VA_ARGS__));		\
 			srcu_read_unlock(&modules_ss, idx);				\
 		}									\
