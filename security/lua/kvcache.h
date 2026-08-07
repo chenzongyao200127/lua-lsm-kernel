@@ -19,9 +19,12 @@
 
 #define CACHE_CAPACITY	1024
 
-/* UNINIT must stay 0: kzalloc'd LSM blobs skip an explicit initializer. */
+/*
+ * Lazy promotion is mandatory, not an optimization: gating skips the
+ * *_alloc_security prepare hooks while dormant.
+ */
 enum kvcache_dict_state {
-	KVCACHE_DICT_UNINIT,
+	KVCACHE_DICT_UNINIT = 0,
 	KVCACHE_DICT_INITING,
 	KVCACHE_DICT_READY,
 };
