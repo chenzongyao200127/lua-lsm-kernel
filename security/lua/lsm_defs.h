@@ -207,6 +207,7 @@ static inline bool lua_lsm_hook_active(unsigned int nr)
 	       atomic_read(&lua_lsm_hook_stats[nr].nhooks) != 0;
 }
 
+/* __postpone_ defaults to a __weak stub the compiler cannot elide. */
 static inline bool lua_lsm_hook_has_inactive_cleanup(unsigned int nr)
 {
 	switch (nr) {
@@ -258,6 +259,7 @@ static inline bool lua_lsm_hook_has_inactive_cleanup(unsigned int nr)
 		struct lua_lsm_module *module;						\
 		lua_State *L;								\
 		int ret = LSM_RET_DEFAULT(NAME);					\
+		/* unregister can race __prepare_; a lost policy yields the default */	\
 		if (!lua_lsm_hook_active(__LL_NR_ ## NAME))				\
 			goto out;							\
 		L = lvm_get();								\

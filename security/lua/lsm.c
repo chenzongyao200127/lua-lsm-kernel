@@ -1141,10 +1141,7 @@ int lua_lsm_module_register(const char *code, size_t len)
 
 		module->state = LMS_STATE_LIVE;
 		list_add_tail_rcu(&module->list, &lsm_modules);
-		/*
-		 * Once any Lua policy has been loaded, inactive free-hook cleanup
-		 * must stay armed for objects that outlive later module unload.
-		 */
+		/* objects and task VMs outlive their module; never disarm */
 		static_branch_enable(&lua_lsm_inactive_cleanup_armed);
 		static_branch_inc(&lua_lsm_modules_active);
 	}
