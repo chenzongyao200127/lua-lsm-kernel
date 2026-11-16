@@ -2,7 +2,6 @@ name: Lua-LSM CI
 
 on:
   pull_request:
-    branches: [lua-lsm]
   workflow_dispatch:
 
 jobs:
