@@ -7,7 +7,8 @@ on:
 jobs:
   functional:
     name: functional matrix
-    runs-on: ubuntu-latest
+    # ubuntu-24.04: newer glibc sys/byteorder.h clashes with relocs.c le*_to_cpu
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       WS: ${{ github.workspace }}/ws
