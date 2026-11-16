@@ -9,6 +9,7 @@
  * (e.g. relocs enables both endian branches and miscompiles).
  */
 #include_next <endian.h>
+#include <byteswap.h>
 #else
 
 #include <byteswap.h>
