@@ -8,6 +8,9 @@ struct label_t {
 	 * (ra, sp, s0-s11).
 	 */
 	unsigned long regs[14];
+#ifdef CONFIG_SHADOW_CALL_STACK
+	unsigned long scs_sp;
+#endif
 };
 
 extern int setjmp(struct label_t *label);
