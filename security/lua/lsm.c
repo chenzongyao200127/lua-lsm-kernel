@@ -279,6 +279,7 @@ static DECLARE_WORK(lua_lsm_module_finalize_work,
 		    lua_lsm_module_finalize_workfn);
 
 static LIST_HEAD(orphan_modules);
+static DEFINE_SPINLOCK(orphan_lock);
 static int loaded_modules_key;
 
 static int lua_state_alloc(struct lvm_state *lvm);
@@ -1440,17 +1441,23 @@ static void lua_lsm_module_release_srcu(struct rcu_head *rcu)
 
 	module = container_of(rcu, struct lua_lsm_module, rcu);
 
-	mutex_lock(&modules_mutex);
+	/*
+	 * SRCU callbacks run with bottom halves disabled, so this path cannot
+	 * take modules_mutex.  A VM that loaded the module after unregister
+	 * still owns a loaded-VM reference: park the module back on the
+	 * orphan list and let the workqueue finish once the last reference
+	 * is dropped.  The unconditional schedule covers a put that ran
+	 * before this callback re-added the module.
+	 */
 	if (atomic_read(&module->loaded_vm_count) != 0) {
-		INIT_LIST_HEAD(&module->orphan);
+		spin_lock(&orphan_lock);
 		list_add_tail(&module->orphan, &orphan_modules);
-		mutex_unlock(&modules_mutex);
+		spin_unlock(&orphan_lock);
+		schedule_work(&lua_lsm_module_finalize_work);
 		return;
 	}
 
 	kvcache_module_nodes_gc(module);
-	mutex_unlock(&modules_mutex);
-
 	lua_lsm_module_free(module);
 }
 
@@ -1478,19 +1485,30 @@ static void lua_lsm_module_finalize_locked(struct lua_lsm_module *module)
 
 	WARN_ON_ONCE(READ_ONCE(module->state) != LMS_STATE_GOING);
 
-	list_del(&module->orphan);
+	spin_lock(&orphan_lock);
+	list_del_init(&module->orphan);
+	spin_unlock(&orphan_lock);
 	call_srcu(&modules_ss, &module->rcu,
 		  lua_lsm_module_release_srcu);
 }
 
 static void lua_lsm_module_finalize_workfn(struct work_struct *work)
 {
+	LIST_HEAD(done);
 	struct lua_lsm_module *module, *tmp;
 
 	mutex_lock(&modules_mutex);
+	spin_lock(&orphan_lock);
 	list_for_each_entry_safe(module, tmp, &orphan_modules, orphan) {
 		if (lua_lsm_module_ready_to_finalize(module))
-			lua_lsm_module_finalize_locked(module);
+			list_move_tail(&module->orphan, &done);
+	}
+	spin_unlock(&orphan_lock);
+
+	list_for_each_entry_safe(module, tmp, &done, orphan) {
+		list_del_init(&module->orphan);
+		call_srcu(&modules_ss, &module->rcu,
+			  lua_lsm_module_release_srcu);
 	}
 	mutex_unlock(&modules_mutex);
 }
@@ -1529,7 +1547,9 @@ int lua_lsm_module_unregister(const char *name)
 	 */
 	lua_lsm_module_mark_shdicts_dead(module);
 	lua_lsm_module_release_shdicts(module);
+	spin_lock(&orphan_lock);
 	list_add_tail(&module->orphan, &orphan_modules);
+	spin_unlock(&orphan_lock);
 
 	/*
 	 * At this time, LuaVM may still be released asynchronously,

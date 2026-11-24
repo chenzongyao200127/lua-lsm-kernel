@@ -278,6 +278,12 @@ static inline bool lua_lsm_hook_has_inactive_cleanup(unsigned int nr)
 			if (READ_ONCE(module->state) != LMS_STATE_LIVE)			\
 				continue;						\
 			lua_getfield(L, -1, module->name);				\
+			/* _MODULES[name] is nil when unregister raced the load */	\
+			/* and the loader forgot the module after its recheck. */	\
+			if (!lua_istable(L, -1)) {					\
+				lua_pop(L, 1);						\
+				continue;						\
+			}								\
 			lua_getfield(L, -1, #NAME);					\
 			WARN_ON(lua_gettop(L) != 6);					\
 			/* stack: [traceback, thread, env, _MODULES, _M, lfunc] */	\
