@@ -1,3 +1,7 @@
+# Self-hosted trial on the hk ECS. The host has no nested virtualization, so
+# the matrix falls back to QEMU TCG: useful as a functional pipeline check,
+# but not a performance or timing-sensitive correctness signal. Move back to
+# a KVM-capable runner before using this branch to gate upstream PRs.
 name: Lua-LSM CI
 
 on:
@@ -16,29 +20,14 @@ env:
 jobs:
   build:
     name: build kernel + rootfs
-    # ubuntu-latest ships a glibc whose sys/byteorder.h clashes with relocs.c.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    runs-on: [self-hosted, Linux, X64, lua-lsm-hk]
+    timeout-minutes: 90
     steps:
       - name: Checkout kernel
         uses: actions/checkout@v4
         with:
           path: ws/kernel/linux
           fetch-depth: 1
-
-      - name: Checkout harness
-        uses: actions/checkout@v4
-        with:
-          repository: chenzongyao200127/lua-lsm-testsuite
-          ref: main
-          path: ws/lua-lsm-testsuite
-
-      - name: Install host dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 qemu-utils openssh-client debootstrap e2fsprogs \
-            flex bison libelf-dev libssl-dev bc cpio
 
       - name: Build kernel
         run: |
@@ -52,10 +41,10 @@ jobs:
       - name: Build rootfs
         run: |
           ssh-keygen -t rsa -b 2048 -f "$WS/ci_key" -N "" -q
-          sudo SSH_PUBKEY="$WS/ci_key.pub" OUTPUT="$WS/rootfs.img" \
-            IMAGE_SIZE=4G \
-            bash "$WS/lua-lsm-testsuite/tools/create_ci_rootfs.sh"
-          sudo chown "$USER" "$WS/rootfs.img"
+          # Root helper is a root-owned copy of the harness script; the runner
+          # only gets sudo for this one command.
+          sudo /usr/local/sbin/lua-lsm-create-rootfs \
+            "$WS/ci_key.pub" "$WS/rootfs.img" 4G
           # Mostly holes; qcow2 -c keeps the artifact small and the harness
           # picks the disk format from the suffix.
           qemu-img convert -f raw -O qcow2 -c "$WS/rootfs.img" "$WS/rootfs.qcow2"
@@ -83,20 +72,14 @@ jobs:
     # Opt-in until the unregister races are fixed: ~12 min build for an
     # expected kernel-bug verdict.
     if: inputs.concurrency || contains(github.event.pull_request.labels.*.name, 'concurrency')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    runs-on: [self-hosted, Linux, X64, lua-lsm-hk]
+    timeout-minutes: 120
     steps:
       - name: Checkout kernel
         uses: actions/checkout@v4
         with:
           path: ws/kernel/linux
           fetch-depth: 1
-
-      - name: Install host dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            flex bison libelf-dev libssl-dev bc cpio
 
       - name: Build kernel
         run: |
@@ -123,6 +106,7 @@ jobs:
       matrix: functional
       config: configs/functional.yaml
       kernel-artifact: lua-lsm-kernel
+      timeout: 180
 
   policies:
     name: custom policy matrix
@@ -133,6 +117,7 @@ jobs:
       config: configs/policies.yaml
       kernel-artifact: lua-lsm-kernel
       kernel-tree: true
+      timeout: 180
 
   concurrency:
     name: concurrency correctness
@@ -147,4 +132,4 @@ jobs:
       kernel-tree: true
       mem: 6G
       smp: "4"
-      timeout: 90
+      timeout: 240

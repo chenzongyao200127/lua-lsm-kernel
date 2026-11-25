@@ -35,10 +35,13 @@ on:
 
 env:
   WS: ${{ github.workspace }}/ws
+  # The hk runner has no nested virtualization; QEMU falls back to TCG.
+  QEMU_ACCEL: tcg
+  CPU_MODEL: max
 
 jobs:
   run:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lua-lsm-hk]
     timeout-minutes: ${{ inputs.timeout }}
     steps:
       - name: Checkout kernel
@@ -71,10 +74,8 @@ jobs:
         run: |
           # Artifact downloads do not preserve modes; sshd-side auth needs 0600.
           chmod 600 "$WS/artifacts/rootfs/ci_key"
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 openssh-client
-          test -e /dev/kvm || { echo "::error::/dev/kvm is required"; exit 1; }
-          sudo chmod 666 /dev/kvm
+          qemu-system-x86_64 --version
+          test -e /dev/kvm && echo "KVM available" || echo "no /dev/kvm; using TCG"
 
       - uses: astral-sh/setup-uv@v5
 
@@ -89,6 +90,9 @@ jobs:
           if [ "$CONFIG_IN_KERNEL" = "true" ]; then
             config="$WS/kernel/linux/$config"
           fi
+          # hk has no nested virt; let every cell run under TCG instead of
+          # being skipped as skip:no-kvm.
+          sed -i 's/kvm_required: true/kvm_required: false/' "$config"
           export MEM_SIZE=${{ inputs.mem }} SMP_COUNT=${{ inputs.smp }}
           uv run python -m harness matrix \
             --config "$config" \
