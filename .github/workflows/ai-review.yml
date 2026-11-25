@@ -1,0 +1,127 @@
+# Automated code review for pull requests, on the hk self-hosted runner.
+#
+# The reviewer is the linux-code-review skill installed out of tree at
+# /opt/lua-lsm-review/linux-code-review; its model credential is read from
+# /etc/lua-lsm-review/bailian.env. Neither the skill nor the credential is
+# checked into this repository.
+#
+# Auto-runs only for same-repository PRs. A fork PR would hand untrusted code
+# to an agent that holds a model credential; use the manual workflow_dispatch
+# (write access required) until the review step is containerized. Do not widen
+# the `if:` guard without doing that first.
+name: ai-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.draft == false &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, Linux, X64, lua-lsm-hk]
+    timeout-minutes: 90
+    env:
+      SKILL: /opt/lua-lsm-review/linux-code-review
+      LCR_AGENT_PROFILE: codex_bailian
+    steps:
+      - name: Check out the PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/head', inputs.pr_number) || github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve PR coordinates
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+          EVENT_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            base_ref=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json baseRefName -q .baseRefName)
+            head=$(git rev-parse HEAD)
+          else
+            base_ref=$EVENT_BASE_REF
+            head=$EVENT_HEAD
+          fi
+          # The base tip can advance past the fork point; make it reachable so
+          # the skill's merge-base calculation sees the same base as the PR.
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            fetch --no-tags origin "+refs/heads/$base_ref:refs/remotes/origin/$base_ref"
+          base=$(git rev-parse "origin/$base_ref")
+          test "$(git rev-parse HEAD)" = "$head"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Run linux-code-review
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          if [ -r /etc/lua-lsm-review/bailian.env ]; then
+            . /etc/lua-lsm-review/bailian.env
+          fi
+          test -n "${DASHSCOPE_API_KEY:-}" || {
+            echo "DASHSCOPE_API_KEY is not configured on this runner" >&2
+            exit 1
+          }
+          test -x "$SKILL/linux_code_review.sh" || {
+            echo "linux-code-review is not installed at $SKILL" >&2
+            exit 1
+          }
+          mkdir -p "$TMPDIR"
+          "$SKILL/linux_code_review.sh" \
+            diff "${{ steps.pr.outputs.base }}" \
+            "$GITHUB_WORKSPACE/review.md" \
+            --per-persona-context=no 2>&1 | tee "$RUNNER_TEMP/review.log"
+
+      - name: Post the review
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+        run: |
+          set -euo pipefail
+          test -s "$GITHUB_WORKSPACE/review.md" || {
+            echo "the review produced no output" >&2
+            exit 1
+          }
+          "$SKILL/scripts/post_reviews_to_github.sh" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr "$PR_NUMBER" \
+            --head-sha "$HEAD_SHA" \
+            --finalize --event comment "$GITHUB_WORKSPACE/review.md"
+
+      - name: Upload the review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-review-${{ steps.pr.outputs.number || github.run_id }}
+          path: |
+            review.md
+            ${{ runner.temp }}/review.log
+          if-no-files-found: ignore
