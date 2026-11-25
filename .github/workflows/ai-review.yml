@@ -6,9 +6,9 @@
 # checked into this repository.
 #
 # Auto-runs only for same-repository PRs. A fork PR would hand untrusted code
-# to an agent that holds a model credential; use the manual workflow_dispatch
-# (write access required) until the review step is containerized. Do not widen
-# the `if:` guard without doing that first.
+# to an agent that holds a model credential, so the job refuses fork PRs for
+# both triggers. Containerize the reviewer or hold the key behind a network
+# proxy before relaxing that.
 name: ai-review
 
 on:
@@ -41,10 +41,30 @@ jobs:
       SKILL: /opt/lua-lsm-review/linux-code-review
       LCR_AGENT_PROFILE: codex_bailian
     steps:
+      - name: Refuse fork PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          head_repo=$(gh api \
+            "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+            --jq .head.repo.full_name)
+          if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::PR #$PR_NUMBER comes from $head_repo;" \
+              "the credential-bearing reviewer only runs on same-repository PRs" >&2
+            exit 1
+          fi
+
       - name: Check out the PR head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/head', inputs.pr_number) || github.event.pull_request.head.sha }}
+          ref: >-
+            ${{
+              github.event_name == 'workflow_dispatch' &&
+              format('refs/pull/{0}/head', inputs.pr_number) ||
+              github.event.pull_request.head.sha
+            }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -56,13 +76,22 @@ jobs:
         run: |
           set -euo pipefail
           head=$(git rev-parse HEAD)
-          # The skill reviews merge-base(base)..HEAD. The first commit's parent
-          # is that merge-base for the normal (linear) PR; fetch only that many
-          # commits instead of the kernel's full history.
+          # The skill reviews merge-base(base)..HEAD. Ask GitHub for the
+          # current merge-base, then fetch only the PR's commit series
+          # instead of the kernel's full history.
           n=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .commits)
-          case "$n" in ''|*[!0-9]*) echo "unexpected commit count: $n" >&2; exit 1 ;; esac
-          base=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits?per_page=100" --jq '.[0].parents[0].sha')
-          test -n "$base" || { echo "could not resolve the PR's first commit parent" >&2; exit 1; }
+          case "$n" in
+            ''|*[!0-9]*) echo "unexpected commit count: $n" >&2; exit 1 ;;
+          esac
+          base_sha=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+            --jq .base.sha)
+          base=$(gh api \
+            "repos/$GITHUB_REPOSITORY/compare/${base_sha}...${head}" \
+            --jq '.merge_base_commit.sha // empty')
+          test -n "$base" || {
+            echo "could not resolve the PR merge-base" >&2
+            exit 1
+          }
           auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
           depth=$((n + 2))
           git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
