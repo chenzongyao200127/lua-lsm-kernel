@@ -5,8 +5,9 @@
 # /etc/lua-lsm-review/bailian.env. Neither the skill nor the credential is
 # checked into this repository.
 #
-# Triggered by a maintainer comment containing "/ai-review" on a pull request,
-# so nothing runs (and no model quota is spent) until a trusted person asks.
+# Triggered by a maintainer comment containing "/ai-review" on an open pull
+# request, so nothing runs (and no model quota is spent) until a trusted
+# person asks.
 # issue_comment workflows are always taken from the default branch, so changes
 # here only take effect after they land there.
 #
@@ -39,6 +40,7 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       (github.event.issue.pull_request != null &&
+       github.event.issue.state == 'open' &&
        contains(github.event.comment.body, '/ai-review') &&
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
                 github.event.comment.author_association))
