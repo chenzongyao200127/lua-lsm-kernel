@@ -12,14 +12,31 @@ jobs:
         run: |
           set -x
           id
-          cat /etc/os-release | head -2
-          nproc; free -g | head -2
-          which docker && docker version --format '{{.Server.Version}}' || echo NO_DOCKER
-          docker images --format '{{.Repository}}:{{.Tag}}' | head -20 || true
-          which codex && codex --version || echo NO_CODEX
-          which node npm python3 git rg || true
-          ls -ld /opt/lua-lsm-review /opt/lua-lsm-review/linux-code-review
-          stat -c '%U %G %a %n' /etc/lua-lsm-review/bailian.env || echo NO_ENV
-          test -r /etc/lua-lsm-review/bailian.env && echo ENV_READABLE
-          sudo -n true 2>/dev/null && echo SUDO_OK || echo NO_SUDO
-          df -h / | tail -1
+          which bwrap socat || true
+          bwrap --version || echo NO_BWRAP
+          for p in /bin /sbin /lib /lib64 /usr/local/bin/codex /usr/bin/node; do
+            printf '%s -> ' "$p"; readlink -f "$p" || true
+          done
+          head -c 80 /usr/local/bin/codex; echo
+          ls -ld /usr/local/lib/node_modules /usr/lib/node_modules 2>/dev/null || true
+          ls -d /etc/pki /etc/ssl 2>/dev/null || true
+          python3 -c "import ssl; print(ssl.OPENSSL_VERSION)"
+          bwrap --unshare-all --die-with-parent --new-session \
+            --ro-bind /usr /usr --ro-bind /etc/passwd /etc/passwd \
+            --ro-bind /etc/group /etc/group --dev /dev --proc /proc \
+            /usr/bin/true && echo BWRAP_OK || echo BWRAP_FAIL
+          bwrap --unshare-all --die-with-parent --new-session \
+            --ro-bind /usr /usr --ro-bind /etc/passwd /etc/passwd \
+            --ro-bind /etc/group /etc/group --dev /dev --proc /proc \
+            /usr/bin/python3 -c 'import socket
+s = socket.socket(); s.settimeout(2)
+print("net_rc", s.connect_ex(("1.1.1.1", 443)))' || echo NET_TEST_FAIL
+          python3 - <<'PY'
+import socket, threading
+p = "/tmp/probe.sock"
+try:
+    srv = socket.socket(socket.AF_UNIX); srv.bind(p); srv.listen(1)
+    print("unix_socket_ok")
+except OSError as e:
+    print("unix_socket_fail", e)
+PY
