@@ -3,15 +3,20 @@
 # SPDX-License-Identifier: GPL-2.0
 
 #
-# sandbox.sh — run the reviewer inside a bubblewrap sandbox that has no
-# network route except 127.0.0.1, where relay.py forwards to the host's
-# unix-socket proxy. The sandbox starts with a cleared environment and a
-# dummy key; the real credential stays in the host-side proxy.
+# sandbox.sh — run the reviewer inside a bubblewrap sandbox with no network
+# route except loopback, where relay.py forwards to the host-side proxy.
+# The sandbox starts with a cleared environment and a dummy key; the real
+# credential stays in the host-side proxy (proxy.py).
 #
-# Usage: sandbox.sh <workspace> <skill-dir> <harness-dir> <proxy-socket> <base>
+# Usage: sandbox.sh <workspace> <skill-dir> <proxy-socket> <base>
 set -euo pipefail
 
-ws="$1" skill="$2" harness="$3" sock="$4" base="$5"
+[[ $# -eq 4 ]] || {
+    echo "usage: sandbox.sh <workspace> <skill-dir> <proxy-socket> <base>" >&2
+    exit 2; }
+
+ws="$1" skill="$2" sock="$3" base="$4"
+here="$(cd "$(dirname "$0")" && pwd)"
 
 exec bwrap \
     --unshare-all --die-with-parent --new-session --clearenv \
@@ -24,8 +29,8 @@ exec bwrap \
     --ro-bind /etc/group /etc/group \
     --ro-bind /etc/hosts /etc/hosts \
     --ro-bind "$skill" /skill \
-    --ro-bind "$harness/profile" /profile \
-    --ro-bind "$harness/relay.py" /relay.py \
+    --ro-bind "$here/profile" /profile \
+    --ro-bind "$here/relay.py" /relay.py \
     --ro-bind "$sock" /run/proxy.sock \
     --bind "$ws" /work \
     --tmpfs /tmp \
