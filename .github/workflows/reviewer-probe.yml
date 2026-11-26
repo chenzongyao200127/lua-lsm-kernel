@@ -28,15 +28,5 @@ jobs:
           bwrap --unshare-all --die-with-parent --new-session \
             --ro-bind /usr /usr --ro-bind /etc/passwd /etc/passwd \
             --ro-bind /etc/group /etc/group --dev /dev --proc /proc \
-            /usr/bin/python3 -c 'import socket
-s = socket.socket(); s.settimeout(2)
-print("net_rc", s.connect_ex(("1.1.1.1", 443)))' || echo NET_TEST_FAIL
-          python3 - <<'PY'
-import socket, threading
-p = "/tmp/probe.sock"
-try:
-    srv = socket.socket(socket.AF_UNIX); srv.bind(p); srv.listen(1)
-    print("unix_socket_ok")
-except OSError as e:
-    print("unix_socket_fail", e)
-PY
+            /usr/bin/python3 -c 'import socket; s = socket.socket(); s.settimeout(2); print("net_rc", s.connect_ex(("1.1.1.1", 443)))' || echo NET_TEST_FAIL
+          python3 -c 'import socket; srv = socket.socket(socket.AF_UNIX); srv.bind("/tmp/probe.sock"); srv.listen(1); print("unix_socket_ok")'
