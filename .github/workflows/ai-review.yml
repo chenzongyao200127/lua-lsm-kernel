@@ -1,0 +1,158 @@
+# Automated code review for pull requests, on the hk self-hosted runner.
+#
+# The reviewer is the linux-code-review skill installed out of tree at
+# /opt/lua-lsm-review/linux-code-review; its model credential is read from
+# /etc/lua-lsm-review/bailian.env. Neither the skill nor the credential is
+# checked into this repository.
+#
+# Triggered by a maintainer comment containing "/ai-review" on a pull request,
+# so nothing runs (and no model quota is spent) until a trusted person asks.
+# issue_comment workflows are always taken from the default branch, so changes
+# here only take effect after they land there.
+#
+# Same-repository PRs only. A fork PR would hand untrusted code to an agent
+# that holds a model credential and can read the host filesystem, so the job
+# refuses fork PRs until the reviewer runs in a throwaway container behind a
+# credential proxy.
+name: ai-review
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ai-review-${{ github.event.issue.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request != null &&
+       contains(github.event.comment.body, '/ai-review') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                github.event.comment.author_association))
+    runs-on: [self-hosted, Linux, X64, lua-lsm-hk]
+    timeout-minutes: 90
+    env:
+      SKILL: /opt/lua-lsm-review/linux-code-review
+      LCR_AGENT_PROFILE: codex_bailian
+      PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
+    steps:
+      - name: Refuse fork PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head_repo=$(gh api \
+            "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+            --jq .head.repo.full_name)
+          if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::PR #$PR_NUMBER comes from $head_repo;" \
+              "the credential-bearing reviewer only runs on same-repository PRs" >&2
+            exit 1
+          fi
+
+      - name: Check out the PR head
+        uses: actions/checkout@v4
+        with:
+          ref: >-
+            refs/pull/${{
+              github.event.issue.number || inputs.pr_number
+            }}/head
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve PR coordinates
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse HEAD)
+          # The skill reviews merge-base(base)..HEAD. Ask GitHub for the
+          # current merge-base, then fetch only the PR's commit series
+          # instead of the kernel's full history.
+          n=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .commits)
+          case "$n" in
+            ''|*[!0-9]*) echo "unexpected commit count: $n" >&2; exit 1 ;;
+          esac
+          base_sha=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
+            --jq .base.sha)
+          base=$(gh api \
+            "repos/$GITHUB_REPOSITORY/compare/${base_sha}...${head}" \
+            --jq '.merge_base_commit.sha // empty')
+          test -n "$base" || {
+            echo "could not resolve the PR merge-base" >&2
+            exit 1
+          }
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          depth=$((n + 2))
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            fetch --no-tags --depth="$depth" origin "refs/pull/$PR_NUMBER/head"
+          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+              fetch --no-tags --deepen="$depth" origin "refs/pull/$PR_NUMBER/head"
+          fi
+          git cat-file -e "${base}^{commit}"
+          echo "head=$head" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Run linux-code-review
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          if [ -r /etc/lua-lsm-review/bailian.env ]; then
+            . /etc/lua-lsm-review/bailian.env
+          fi
+          test -n "${DASHSCOPE_API_KEY:-}" || {
+            echo "DASHSCOPE_API_KEY is not configured on this runner" >&2
+            exit 1
+          }
+          test -x "$SKILL/linux_code_review.sh" || {
+            echo "linux-code-review is not installed at $SKILL" >&2
+            exit 1
+          }
+          mkdir -p "$TMPDIR"
+          "$SKILL/linux_code_review.sh" \
+            diff "${{ steps.pr.outputs.base }}" \
+            "$GITHUB_WORKSPACE/review.md" \
+            --per-persona-context=no 2>&1 | tee "$RUNNER_TEMP/review.log"
+
+      - name: Post the review
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+        run: |
+          set -euo pipefail
+          test -s "$GITHUB_WORKSPACE/review.md" || {
+            echo "the review produced no output" >&2
+            exit 1
+          }
+          "$SKILL/scripts/post_reviews_to_github.sh" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr "$PR_NUMBER" \
+            --head-sha "$HEAD_SHA" \
+            --finalize --event comment "$GITHUB_WORKSPACE/review.md"
+
+      - name: Upload the review
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-review-${{ github.event.issue.number || inputs.pr_number }}
+          path: |
+            review.md
+            ${{ runner.temp }}/review.log
+          if-no-files-found: ignore
