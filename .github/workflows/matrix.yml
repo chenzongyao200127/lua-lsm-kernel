@@ -41,7 +41,7 @@ env:
 
 jobs:
   run:
-    runs-on: [self-hosted, Linux, X64, lua-lsm-hk]
+    runs-on: [self-hosted, Linux, X64, lua-lsm-kvm]
     timeout-minutes: ${{ inputs.timeout }}
     steps:
       - name: Checkout kernel

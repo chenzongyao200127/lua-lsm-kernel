@@ -1,7 +1,6 @@
-# Self-hosted trial on the hk ECS. The host has no nested virtualization, so
-# the matrix falls back to QEMU TCG: useful as a functional pipeline check,
-# but not a performance or timing-sensitive correctness signal. Move back to
-# a KVM-capable runner before using this branch to gate upstream PRs.
+# Self-hosted CI for the Lua-LSM matrices. The runner must have a KVM-capable
+# host and carry the lua-lsm-kvm label; the hk ECS has no nested virtualization
+# and keeps only lua-lsm-hk, so it is not selected.
 name: Lua-LSM CI
 
 on:
@@ -20,7 +19,7 @@ env:
 jobs:
   build:
     name: build kernel + rootfs
-    runs-on: [self-hosted, Linux, X64, lua-lsm-hk]
+    runs-on: [self-hosted, Linux, X64, lua-lsm-kvm]
     timeout-minutes: 90
     steps:
       - name: Checkout kernel
@@ -72,7 +71,7 @@ jobs:
     # Opt-in until the unregister races are fixed: ~12 min build for an
     # expected kernel-bug verdict.
     if: inputs.concurrency || contains(github.event.pull_request.labels.*.name, 'concurrency')
-    runs-on: [self-hosted, Linux, X64, lua-lsm-hk]
+    runs-on: [self-hosted, Linux, X64, lua-lsm-kvm]
     timeout-minutes: 120
     steps:
       - name: Checkout kernel
