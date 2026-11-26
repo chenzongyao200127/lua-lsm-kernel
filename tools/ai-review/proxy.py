@@ -16,14 +16,16 @@ UPSTREAM_HOST = "dashscope.aliyuncs.com"
 UPSTREAM_PORT = 443
 TIMEOUT = 900
 
-DROP = {
+# Request headers we must not copy: the credential is ours to add, and
+# framing and connection management are the client library's business.
+DROP_REQUEST = {
     "host", "authorization", "content-length", "connection",
     "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
     "trailer", "transfer-encoding", "upgrade",
 }
 # Response headers we must not copy: framing and connection management are
 # ours to decide.
-DROP_RESP = {
+DROP_RESPONSE = {
     "connection", "keep-alive", "proxy-authenticate",
     "proxy-authorization", "te", "trailer", "transfer-encoding",
     "upgrade",
@@ -58,9 +60,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _relay(self):
         body = self._body()
-
         headers = {k: v for k, v in self.headers.items()
-                   if k.lower() not in DROP}
+                   if k.lower() not in DROP_REQUEST}
         headers["Authorization"] = "Bearer " + API_KEY
 
         conn = http.client.HTTPSConnection(
@@ -70,31 +71,34 @@ class Handler(BaseHTTPRequestHandler):
             resp = conn.getresponse()
             self.send_response(resp.status)
             for key, value in resp.getheaders():
-                if key.lower() not in DROP_RESP and key.lower() != "content-length":
+                if key.lower() not in DROP_RESPONSE and \
+                        key.lower() != "content-length":
                     self.send_header(key, value)
-            length_hdr = resp.getheader("Content-Length")
-            if length_hdr is not None:
-                self.send_header("Content-Length", length_hdr)
-                self.end_headers()
-                while True:
-                    chunk = resp.read1(65536)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
-            else:
-                self.send_header("Transfer-Encoding", "chunked")
-                self.end_headers()
-                while True:
-                    chunk = resp.read1(65536)
-                    if not chunk:
-                        break
-                    self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
-                    self.wfile.flush()
-                self.wfile.write(b"0\r\n\r\n")
-                self.wfile.flush()
+            self._stream(resp)
         finally:
             conn.close()
+
+    def _stream(self, resp):
+        length = resp.getheader("Content-Length")
+        if length is not None:
+            self.send_header("Content-Length", length)
+            self.end_headers()
+            while True:
+                chunk = resp.read1(65536)
+                if not chunk:
+                    return
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        while True:
+            chunk = resp.read1(65536)
+            if not chunk:
+                break
+            self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+            self.wfile.flush()
+        self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
 
     do_GET = _relay
     do_POST = _relay
