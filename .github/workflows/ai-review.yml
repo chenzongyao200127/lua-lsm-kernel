@@ -8,9 +8,10 @@
 # Trust model: only commits authored by the repository owner are reviewed
 # (checked against the GitHub commit list after checkout). The agent itself
 # runs inside a bubblewrap sandbox with no network route except loopback,
-# where tools/ai-review/relay.py forwards to a host-side unix-socket proxy
-# that holds the real key (tools/ai-review/proxy.py). The sandbox sees a
-# dummy key, the PR checkout, and the skill -- nothing else.
+# where the skill's sandbox/relay.py forwards to a host-side unix-socket
+# proxy (sandbox/proxy.py) that holds the real key. The sandbox sees a
+# dummy key, the PR checkout (mounted read-only), and the skill -- nothing
+# else; the agent writes only into a dedicated output directory.
 #
 # Triggered by PR pushes, by a maintainer comment containing "/ai-review"
 # on an open PR, or manually. issue_comment workflows are always taken from
@@ -119,22 +120,6 @@ jobs:
           echo "head=$head" >> "$GITHUB_OUTPUT"
           echo "base=$base" >> "$GITHUB_OUTPUT"
 
-      - name: Fetch the reviewer harness
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REF: ${{ steps.pr.outputs.head }}
-        run: |
-          set -euo pipefail
-          dest="$RUNNER_TEMP/ai-review-harness"
-          rm -rf "$dest"
-          mkdir -p "$dest/profile"
-          for f in proxy.py relay.py sandbox.sh \
-                   profile/profile.json profile/config.toml; do
-            gh api -X GET \
-              "repos/$GITHUB_REPOSITORY/contents/tools/ai-review/$f" \
-              -f ref="$REF" --jq .content | base64 -d > "$dest/$f"
-          done
-
       - name: Run linux-code-review (sandboxed)
         env:
           TMPDIR: ${{ runner.temp }}
@@ -146,11 +131,15 @@ jobs:
             echo "DASHSCOPE_API_KEY is not configured on this runner" >&2
             exit 1
           }
-          test -x "$SKILL/linux_code_review.sh" || {
-            echo "linux-code-review is not installed at $SKILL" >&2
-            exit 1
-          }
-          harness="$RUNNER_TEMP/ai-review-harness"
+          harness="$SKILL/sandbox"
+          for f in linux_code_review.sh sandbox/sandbox.sh \
+                   sandbox/proxy.py sandbox/relay.py \
+                   sandbox/profile/profile.json sandbox/profile/config.toml; do
+            test -f "$SKILL/$f" || {
+              echo "missing $SKILL/$f: is the full skill installed?" >&2
+              exit 1
+            }
+          done
           out="$RUNNER_TEMP/ai-review-out"
           rm -rf "$out"; mkdir -p "$out"
           sock="$RUNNER_TEMP/proxy-$GITHUB_RUN_ID.sock"
