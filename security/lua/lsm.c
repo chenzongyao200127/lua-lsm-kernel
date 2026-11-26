@@ -1293,6 +1293,7 @@ int lua_lsm_module_unregister(const char *name)
 	int err;
 	int i;
 
+	/* Serialize against concurrent load/unload of the same name. */
 	mutex_lock(&modules_mutex);
 	list_for_each_entry(module, &lsm_modules, list) {
 		if (strcmp(module->name, name) == 0) {
