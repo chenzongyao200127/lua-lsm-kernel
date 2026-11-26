@@ -78,7 +78,7 @@ struct lua_lsm_hook_stat lua_lsm_hook_stats[] = {
 
 /********************************** stats **********************************/
 
-/* Used by module unregister */
+/* Live module references; unregister drains this before freeing. */
 static atomic_t vm_nusage = ATOMIC_INIT(0);
 
 #ifdef CONFIG_SECURITY_LUA_LSM_STATS
