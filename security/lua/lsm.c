@@ -47,6 +47,7 @@ int lua_lsm_initialized __initdata;
 
 /********************************* lsm hook *********************************/
 
+/* Writer-side lock; readers walk the list under modules_ss. */
 struct list_head lsm_modules = LIST_HEAD_INIT(lsm_modules);
 static DEFINE_MUTEX(modules_mutex);
 DEFINE_SRCU(modules_ss);
