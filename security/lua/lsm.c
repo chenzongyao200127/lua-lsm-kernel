@@ -1570,3 +1570,4 @@ DEFINE_LSM(lua) = {
 	.init = lua_lsm_init,
 	.initcall_fs = lua_lsm_securityfs_init,
 };
+
