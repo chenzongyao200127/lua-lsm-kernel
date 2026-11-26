@@ -5,15 +5,20 @@
 # /etc/lua-lsm-review/bailian.env. Neither the skill nor the credential is
 # checked into this repository.
 #
-# Auto-runs only for same-repository PRs. A fork PR would hand untrusted code
-# to an agent that holds a model credential, so the job refuses fork PRs for
-# both triggers. Containerize the reviewer or hold the key behind a network
-# proxy before relaxing that.
+# Triggered by a maintainer comment containing "/ai-review" on a pull request,
+# so nothing runs (and no model quota is spent) until a trusted person asks.
+# issue_comment workflows are always taken from the default branch, so changes
+# here only take effect after they land there.
+#
+# Same-repository PRs only. A fork PR would hand untrusted code to an agent
+# that holds a model credential and can read the host filesystem, so the job
+# refuses fork PRs until the reviewer runs in a throwaway container behind a
+# credential proxy.
 name: ai-review
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -26,25 +31,27 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: ai-review-${{ github.event.pull_request.number || inputs.pr_number }}
+  group: ai-review-${{ github.event.issue.number || inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
   review:
     if: >
       github.event_name == 'workflow_dispatch' ||
-      (github.event.pull_request.draft == false &&
-       github.event.pull_request.head.repo.full_name == github.repository)
+      (github.event.issue.pull_request != null &&
+       contains(github.event.comment.body, '/ai-review') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                github.event.comment.author_association))
     runs-on: [self-hosted, Linux, X64, lua-lsm-hk]
     timeout-minutes: 90
     env:
       SKILL: /opt/lua-lsm-review/linux-code-review
       LCR_AGENT_PROFILE: codex_bailian
+      PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
     steps:
       - name: Refuse fork PRs
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
         run: |
           set -euo pipefail
           head_repo=$(gh api \
@@ -60,11 +67,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: >-
-            ${{
-              github.event_name == 'workflow_dispatch' &&
-              format('refs/pull/{0}/head', inputs.pr_number) ||
-              github.event.pull_request.head.sha
-            }}
+            refs/pull/${{
+              github.event.issue.number || inputs.pr_number
+            }}/head
           fetch-depth: 1
           persist-credentials: false
 
@@ -72,7 +77,6 @@ jobs:
         id: pr
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
         run: |
           set -euo pipefail
           head=$(git rev-parse HEAD)
@@ -101,7 +105,6 @@ jobs:
               fetch --no-tags --deepen="$depth" origin "refs/pull/$PR_NUMBER/head"
           fi
           git cat-file -e "${base}^{commit}"
-          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "head=$head" >> "$GITHUB_OUTPUT"
           echo "base=$base" >> "$GITHUB_OUTPUT"
 
@@ -131,7 +134,6 @@ jobs:
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
           HEAD_SHA: ${{ steps.pr.outputs.head }}
         run: |
           set -euo pipefail
@@ -149,7 +151,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ai-review-${{ steps.pr.outputs.number || github.run_id }}
+          name: ai-review-${{ github.event.issue.number || inputs.pr_number }}
           path: |
             review.md
             ${{ runner.temp }}/review.log
