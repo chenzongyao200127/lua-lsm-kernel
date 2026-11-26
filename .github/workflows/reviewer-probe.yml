@@ -1,0 +1,25 @@
+name: reviewer-probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: [self-hosted, Linux, X64, lua-lsm-hk]
+    timeout-minutes: 10
+    steps:
+      - name: Report the runner environment
+        run: |
+          set -x
+          id
+          cat /etc/os-release | head -2
+          nproc; free -g | head -2
+          which docker && docker version --format '{{.Server.Version}}' || echo NO_DOCKER
+          docker images --format '{{.Repository}}:{{.Tag}}' | head -20 || true
+          which codex && codex --version || echo NO_CODEX
+          which node npm python3 git rg || true
+          ls -ld /opt/lua-lsm-review /opt/lua-lsm-review/linux-code-review
+          stat -c '%U %G %a %n' /etc/lua-lsm-review/bailian.env || echo NO_ENV
+          test -r /etc/lua-lsm-review/bailian.env && echo ENV_READABLE
+          sudo -n true 2>/dev/null && echo SUDO_OK || echo NO_SUDO
+          df -h / | tail -1
