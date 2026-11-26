@@ -141,7 +141,7 @@ jobs:
           BASE: ${{ steps.pr.outputs.base }}
         run: |
           set -euo pipefail
-          . /etc/lua-lsm-review/bailian.env
+          set -a; . /etc/lua-lsm-review/bailian.env; set +a
           test -n "${DASHSCOPE_API_KEY:-}" || {
             echo "DASHSCOPE_API_KEY is not configured on this runner" >&2
             exit 1
@@ -151,6 +151,8 @@ jobs:
             exit 1
           }
           harness="$RUNNER_TEMP/ai-review-harness"
+          out="$RUNNER_TEMP/ai-review-out"
+          rm -rf "$out"; mkdir -p "$out"
           sock="$RUNNER_TEMP/proxy-$GITHUB_RUN_ID.sock"
           python3 "$harness/proxy.py" "$sock" &
           proxy_pid=$!
@@ -161,7 +163,7 @@ jobs:
           done
           [ -S "$sock" ] || { echo "the proxy did not start" >&2; exit 1; }
           bash "$harness/sandbox.sh" \
-            "$GITHUB_WORKSPACE" "$SKILL" "$sock" "$BASE" \
+            "$GITHUB_WORKSPACE" "$SKILL" "$sock" "$BASE" "$out" \
             2>&1 | tee "$RUNNER_TEMP/review.log"
 
       - name: Post the review
@@ -171,7 +173,8 @@ jobs:
           HEAD_SHA: ${{ steps.pr.outputs.head }}
         run: |
           set -euo pipefail
-          test -s "$GITHUB_WORKSPACE/review.md" || {
+          review="$RUNNER_TEMP/ai-review-out/review.md"
+          test -s "$review" || {
             echo "the review produced no output" >&2
             exit 1
           }
@@ -179,7 +182,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --pr "$PR_NUMBER" \
             --head-sha "$HEAD_SHA" \
-            --finalize --event comment "$GITHUB_WORKSPACE/review.md"
+            --finalize --event comment "$review"
 
       - name: Upload the review
         if: always()
@@ -187,7 +190,5 @@ jobs:
         with:
           name: ai-review-${{ github.event.pull_request.number ||
             github.event.issue.number || inputs.pr_number }}
-          path: |
-            review.md
-            ${{ runner.temp }}/review.log
+          path: ${{ runner.temp }}/ai-review-out/review.md
           if-no-files-found: ignore

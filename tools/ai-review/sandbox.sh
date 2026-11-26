@@ -8,18 +8,24 @@
 # The sandbox starts with a cleared environment and a dummy key; the real
 # credential stays in the host-side proxy (proxy.py).
 #
-# Usage: sandbox.sh <workspace> <skill-dir> <proxy-socket> <base>
+# The workspace is mounted read-only: the agent must not be able to plant
+# files (for example git hooks) that a later step would execute on the
+# host. Only the output directory is writable.
+#
+# Usage: sandbox.sh <workspace> <skill-dir> <proxy-socket> <base> <output-dir>
 set -euo pipefail
 
-[[ $# -eq 4 ]] || {
-    echo "usage: sandbox.sh <workspace> <skill-dir> <proxy-socket> <base>" >&2
+[[ $# -eq 5 ]] || {
+    echo "usage: sandbox.sh <workspace> <skill-dir> <proxy-socket> <base> <output-dir>" >&2
     exit 2; }
 
-ws="$1" skill="$2" sock="$3" base="$4"
+ws="$1" skill="$2" sock="$3" base="$4" out="$5"
+[[ -d "$out" ]] || { echo "sandbox.sh: no such output directory: $out" >&2; exit 2; }
 here="$(cd "$(dirname "$0")" && pwd)"
 
 exec bwrap \
     --unshare-all --die-with-parent --new-session --clearenv \
+    --cap-drop ALL \
     --ro-bind /usr /usr \
     --symlink usr/bin /bin \
     --symlink usr/sbin /sbin \
@@ -32,7 +38,8 @@ exec bwrap \
     --ro-bind "$here/profile" /profile \
     --ro-bind "$here/relay.py" /relay.py \
     --ro-bind "$sock" /run/proxy.sock \
-    --bind "$ws" /work \
+    --ro-bind "$ws" /work \
+    --bind "$out" /out \
     --tmpfs /tmp \
     --dev /dev \
     --tmpfs /dev/shm \
@@ -44,5 +51,5 @@ exec bwrap \
     --setenv LANG C.UTF-8 \
     --setenv DASHSCOPE_API_KEY proxy-injected \
     --setenv LCR_AGENT_PROFILE /profile \
-    /usr/bin/bash -c 'python3 /relay.py 8080 /run/proxy.sock & exec /skill/linux_code_review.sh diff "$1" /work/review.md --per-persona-context=no' \
+    /usr/bin/bash -c 'python3 /relay.py 8080 /run/proxy.sock & exec /skill/linux_code_review.sh diff "$1" /out/review.md --per-persona-context=no' \
     _ "$base"
