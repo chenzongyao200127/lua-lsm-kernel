@@ -94,13 +94,16 @@ class Handler(BaseHTTPRequestHandler):
         touch()
         base = ALLOWED_PREFIX.rstrip("/")
         if self.path != base and not self.path.startswith(ALLOWED_PREFIX):
-            sys.stderr.write("proxy: refused path %s\n" % self.path)
+            sys.stderr.write("proxy: refused path %r\n" % self.path)
             self._reject(403)
             return
         try:
             body = self._body()
         except BodyTooLarge:
             self._reject(413)
+            return
+        except ValueError:
+            self._reject(400)
             return
 
         headers = {k: v for k, v in self.headers.items()

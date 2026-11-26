@@ -165,6 +165,16 @@ jobs:
           bash "$harness/sandbox.sh" \
             "$GITHUB_WORKSPACE" "$SKILL" "$sock" "$BASE" "$out" \
             2>&1 | tee "$RUNNER_TEMP/review.log"
+          # The sandbox shares this directory with the host: never let it
+          # point review.md at a host file through a link.
+          review="$out/review.md"
+          if [ -L "$review" ] || [ ! -f "$review" ]; then
+            echo "::error::the sandbox produced no regular review.md" >&2
+            exit 1
+          fi
+          dest="$RUNNER_TEMP/ai-review-upload"
+          rm -rf "$dest"; mkdir -p "$dest"
+          cp "$review" "$dest/review.md"
 
       - name: Post the review
         if: success()
@@ -173,7 +183,7 @@ jobs:
           HEAD_SHA: ${{ steps.pr.outputs.head }}
         run: |
           set -euo pipefail
-          review="$RUNNER_TEMP/ai-review-out/review.md"
+          review="$RUNNER_TEMP/ai-review-upload/review.md"
           test -s "$review" || {
             echo "the review produced no output" >&2
             exit 1
@@ -190,5 +200,5 @@ jobs:
         with:
           name: ai-review-${{ github.event.pull_request.number ||
             github.event.issue.number || inputs.pr_number }}
-          path: ${{ runner.temp }}/ai-review-out/review.md
+          path: ${{ runner.temp }}/ai-review-upload/review.md
           if-no-files-found: ignore
