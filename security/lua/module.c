@@ -343,7 +343,7 @@ static void irq_vm_drop_module(int cpu, struct lua_lsm_module *module)
 	bool dropped;
 
 	local_bh_disable();
-	dropped = lvm_drop_module(lvm_irq_state(cpu), module);
+	dropped = lvm_put_module(lvm_irq_state(cpu), module);
 	if (dropped)
 		__log_info("<%s>: dropped from irq VM on cpu %d\n",
 			   module->name, cpu);
