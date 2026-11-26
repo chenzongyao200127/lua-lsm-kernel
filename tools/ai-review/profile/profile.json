@@ -1,0 +1,9 @@
+{
+  "command": [
+    "codex", "exec", "--ephemeral", "--skip-git-repo-check",
+    "--sandbox", "danger-full-access",
+    "-c", "approval_policy=\"never\"",
+    "{prompt}"
+  ],
+  "env": { "CODEX_HOME": "{workdir}" }
+}
