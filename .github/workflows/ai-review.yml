@@ -5,19 +5,21 @@
 # /etc/lua-lsm-review/bailian.env. Neither the skill nor the credential is
 # checked into this repository.
 #
-# Triggered by a maintainer comment containing "/ai-review" on an open pull
-# request, so nothing runs (and no model quota is spent) until a trusted
-# person asks.
-# issue_comment workflows are always taken from the default branch, so changes
-# here only take effect after they land there.
+# Trust model: only commits authored by the repository owner are reviewed
+# (checked against the GitHub commit list after checkout). The agent itself
+# runs inside a bubblewrap sandbox with no network route except loopback,
+# where tools/ai-review/relay.py forwards to a host-side unix-socket proxy
+# that holds the real key (tools/ai-review/proxy.py). The sandbox sees a
+# dummy key, the PR checkout, and the skill -- nothing else.
 #
-# Same-repository PRs only. A fork PR would hand untrusted code to an agent
-# that holds a model credential and can read the host filesystem, so the job
-# refuses fork PRs until the reviewer runs in a throwaway container behind a
-# credential proxy.
+# Triggered by PR pushes, by a maintainer comment containing "/ai-review"
+# on an open PR, or manually. issue_comment workflows are always taken from
+# the default branch, so changes here only take effect after they land there.
 name: ai-review
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   issue_comment:
     types: [created]
   workflow_dispatch:
@@ -32,15 +34,22 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: ai-review-${{ github.event.issue.number || inputs.pr_number }}
+  group: >-
+    ai-review-${{ github.event.pull_request.number ||
+    github.event.issue.number || inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
   review:
     if: >
       github.event_name == 'workflow_dispatch' ||
-      (github.event.issue.pull_request != null &&
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.draft == false &&
+       github.event.pull_request.user.login == github.repository_owner) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
        github.event.issue.state == 'open' &&
+       github.event.issue.user.login == github.repository_owner &&
        contains(github.event.comment.body, '/ai-review') &&
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
                 github.event.comment.author_association))
@@ -48,30 +57,30 @@ jobs:
     timeout-minutes: 90
     env:
       SKILL: /opt/lua-lsm-review/linux-code-review
-      LCR_AGENT_PROFILE: codex_bailian
-      PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
+      PR_NUMBER: >-
+        ${{ github.event.pull_request.number || github.event.issue.number ||
+        inputs.pr_number }}
     steps:
-      - name: Refuse fork PRs
+      - name: Verify the commits are owner-authored
         env:
           GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          head_repo=$(gh api \
-            "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" \
-            --jq .head.repo.full_name)
-          if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
-            echo "::error::PR #$PR_NUMBER comes from $head_repo;" \
-              "the credential-bearing reviewer only runs on same-repository PRs" >&2
+          authors=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits" \
+            --jq '.[].author.login // "unlinked"')
+          echo "$authors" | sort | uniq -c
+          if echo "$authors" | grep -qvx "$OWNER"; then
+            echo "::error::refusing to review: commits not authored by $OWNER"
             exit 1
           fi
 
       - name: Check out the PR head
         uses: actions/checkout@v4
         with:
-          ref: >-
-            refs/pull/${{
-              github.event.issue.number || inputs.pr_number
-            }}/head
+          ref: refs/pull/${{ github.event.pull_request.number ||
+            github.event.issue.number || inputs.pr_number }}/head
           fetch-depth: 1
           persist-credentials: false
 
@@ -110,14 +119,29 @@ jobs:
           echo "head=$head" >> "$GITHUB_OUTPUT"
           echo "base=$base" >> "$GITHUB_OUTPUT"
 
-      - name: Run linux-code-review
+      - name: Fetch the reviewer harness
         env:
-          TMPDIR: ${{ runner.temp }}
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          if [ -r /etc/lua-lsm-review/bailian.env ]; then
-            . /etc/lua-lsm-review/bailian.env
-          fi
+          dest="$RUNNER_TEMP/ai-review-harness"
+          rm -rf "$dest"
+          mkdir -p "$dest/profile"
+          for f in proxy.py relay.py sandbox.sh \
+                   profile/profile.json profile/config.toml; do
+            gh api -X GET \
+              "repos/$GITHUB_REPOSITORY/contents/tools/ai-review/$f" \
+              -f ref="$REF" --jq .content | base64 -d > "$dest/$f"
+          done
+
+      - name: Run linux-code-review (sandboxed)
+        env:
+          TMPDIR: ${{ runner.temp }}
+          BASE: ${{ steps.pr.outputs.base }}
+        run: |
+          set -euo pipefail
+          . /etc/lua-lsm-review/bailian.env
           test -n "${DASHSCOPE_API_KEY:-}" || {
             echo "DASHSCOPE_API_KEY is not configured on this runner" >&2
             exit 1
@@ -126,11 +150,19 @@ jobs:
             echo "linux-code-review is not installed at $SKILL" >&2
             exit 1
           }
-          mkdir -p "$TMPDIR"
-          "$SKILL/linux_code_review.sh" \
-            diff "${{ steps.pr.outputs.base }}" \
-            "$GITHUB_WORKSPACE/review.md" \
-            --per-persona-context=no 2>&1 | tee "$RUNNER_TEMP/review.log"
+          harness="$RUNNER_TEMP/ai-review-harness"
+          sock="$RUNNER_TEMP/proxy-$GITHUB_RUN_ID.sock"
+          python3 "$harness/proxy.py" "$sock" &
+          proxy_pid=$!
+          trap 'kill "$proxy_pid" 2>/dev/null || true; rm -f "$sock"' EXIT
+          for _ in $(seq 1 100); do
+            [ -S "$sock" ] && break
+            sleep 0.1
+          done
+          [ -S "$sock" ] || { echo "the proxy did not start" >&2; exit 1; }
+          bash "$harness/sandbox.sh" \
+            "$GITHUB_WORKSPACE" "$SKILL" "$harness" "$sock" "$BASE" \
+            2>&1 | tee "$RUNNER_TEMP/review.log"
 
       - name: Post the review
         if: success()
@@ -153,7 +185,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ai-review-${{ github.event.issue.number || inputs.pr_number }}
+          name: ai-review-${{ github.event.pull_request.number ||
+            github.event.issue.number || inputs.pr_number }}
           path: |
             review.md
             ${{ runner.temp }}/review.log

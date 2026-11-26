@@ -1,0 +1,9 @@
+model = "glm-5.3"
+model_provider = "bailian"
+model_reasoning_effort = "high"
+
+[model_providers.bailian]
+name = "Alibaba Cloud Model Studio"
+base_url = "http://127.0.0.1:8080/compatible-mode/v1"
+env_key = "DASHSCOPE_API_KEY"
+wire_api = "responses"
